@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>株式会社ながたに｜ログイン</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="view-select" class="center-screen">
+  <h1>株式会社ながたに</h1>
+  <div class="role-cards">
+    <div class="role-card" data-role="driver">
+      <div class="icon">🚚</div>
+      <div class="label">ドライバー用</div>
+    </div>
+    <div class="role-card" data-role="haisya">
+      <div class="icon">📋</div>
+      <div class="label">配車用</div>
+    </div>
+    <div class="role-card" data-role="office">
+      <div class="icon">🏢</div>
+      <div class="label">事務用</div>
+    </div>
+  </div>
+</div>
+
+<div id="view-form" class="center-screen" style="display:none;">
+  <div class="login-box">
+    <h2 id="login-title">ログイン</h2>
+    <div id="login-error" class="error-text" style="display:none;"></div>
+    <div class="field">
+      <label>メールアドレス</label>
+      <input type="email" id="login-email" autocomplete="username">
+    </div>
+    <div class="field">
+      <label>パスワード</label>
+      <input type="password" id="login-pass" autocomplete="current-password">
+    </div>
+    <div class="login-actions">
+      <button type="button" class="back-link" id="back-btn">← 戻る</button>
+      <button type="button" class="btn btn-primary" id="login-btn">ログイン</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/supabase.js"></script>
+<script>
+  let selectedRole = null;
+
+  var ROLE_META = {
+    driver: { title: "🚚 ドライバーログイン", label: "ドライバー用", page: "driver.html" },
+    haisya: { title: "📋 配車ログイン", label: "配車用", page: "haisya.html" },
+    office: { title: "🏢 事務ログイン", label: "事務用", page: "office.html" }
+  };
+
+  document.querySelectorAll(".role-card").forEach(function (el) {
+    el.addEventListener("click", function () {
+      selectedRole = el.getAttribute("data-role");
+      document.getElementById("login-title").textContent = ROLE_META[selectedRole].title;
+      document.getElementById("view-select").style.display = "none";
+      document.getElementById("view-form").style.display = "flex";
+      document.getElementById("login-error").style.display = "none";
+    });
+  });
+
+  document.getElementById("back-btn").addEventListener("click", function () {
+    document.getElementById("view-form").style.display = "none";
+    document.getElementById("view-select").style.display = "flex";
+  });
+
+  function showError(msg) {
+    var el = document.getElementById("login-error");
+    el.textContent = msg;
+    el.style.display = "block";
+  }
+
+  document.getElementById("login-btn").addEventListener("click", async function () {
+    var email = document.getElementById("login-email").value.trim();
+    var pass = document.getElementById("login-pass").value;
+    if (!email || !pass) { showError("メールアドレスとパスワードを入力してください。"); return; }
+
+    var btn = document.getElementById("login-btn");
+    btn.disabled = true;
+    btn.textContent = "ログイン中...";
+
+    var { data, error } = await supabaseClient.auth.signInWithPassword({ email: email, password: pass });
+    if (error) {
+      showError("ログインに失敗しました。メールアドレスまたはパスワードをご確認ください。");
+      btn.disabled = false;
+      btn.textContent = "ログイン";
+      return;
+    }
+
+    var profile = await getMyProfile();
+    if (!profile) {
+      showError("アカウント情報が見つかりませんでした。事務局にお問い合わせください。");
+      await supabaseClient.auth.signOut();
+      btn.disabled = false;
+      btn.textContent = "ログイン";
+      return;
+    }
+
+    if (profile.role !== selectedRole) {
+      showError("選択した種別（" + ROLE_META[selectedRole].label + "）と、このアカウントの権限が一致しません。");
+      await supabaseClient.auth.signOut();
+      btn.disabled = false;
+      btn.textContent = "ログイン";
+      return;
+    }
+
+    window.location.href = (ROLE_META[profile.role] || ROLE_META.driver).page;
+  });
+
+  document.getElementById("login-pass").addEventListener("keydown", function (e) {
+    if (e.key === "Enter") document.getElementById("login-btn").click();
+  });
+
+  (async function initRedirectIfLoggedIn() {
+    var profile = await getMyProfile();
+    if (profile) window.location.href = (ROLE_META[profile.role] || ROLE_META.driver).page;
+  })();
+</script>
+</body>
+</html>

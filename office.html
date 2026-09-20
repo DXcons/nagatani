@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>事務局ダッシュボード｜株式会社ながたに</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>🏢 事務局ダッシュボード</h1>
+  <nav>
+    <a class="btn btn-small" href="rates.html">単価マスタ管理</a>
+    <button class="btn btn-small" id="logout-btn">ログアウト</button>
+  </nav>
+</header>
+
+<div class="container">
+  <div class="page-header">
+    <div>
+      <div class="who" id="office-name-display">-</div>
+      <div class="date" id="office-date-display"></div>
+    </div>
+    <div class="toolbar">
+      <label style="font-size:13px;color:#475569;">表示する日付
+        <input type="date" id="date-input">
+      </label>
+      <button class="btn btn-small" id="refresh-btn">🔄 今すぐ更新</button>
+    </div>
+  </div>
+
+  <div class="notif-panel">
+    <div class="notif-head">
+      <h3>📋 未割当の配車メモ</h3>
+    </div>
+    <div id="memo-list"></div>
+  </div>
+
+  <div class="notif-panel">
+    <div class="notif-head">
+      <h3>🔔 更新アクティビティ</h3>
+    </div>
+    <ul class="notif-list" id="notif-list"></ul>
+  </div>
+
+  <div id="loading" class="loading-state">読み込み中...</div>
+
+  <div id="content" style="display:none;">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:90px;">ドライバー</th>
+            <th style="width:60px;">車番</th>
+            <th style="width:80px;">状態</th>
+            <th style="min-width:120px;">荷主</th>
+            <th style="width:90px;">発地</th>
+            <th style="min-width:110px;">着地</th>
+            <th style="min-width:110px;">品名</th>
+            <th style="width:70px;">数量</th>
+            <th style="width:90px;">請求単価</th>
+            <th style="width:100px;">金額</th>
+            <th style="min-width:110px;">備考</th>
+            <th style="width:70px;">更新</th>
+            <th style="width:160px;">操作</th>
+          </tr>
+        </thead>
+        <tbody id="rows-body"></tbody>
+      </table>
+      <div id="empty-state" class="empty-state" style="display:none;">この日の配車日報はまだありません。</div>
+    </div>
+    <div style="margin-top:14px;color:#64748b;font-size:13px;" id="total-label"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/supabase.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var profile = null;
+  var rows = [];
+  var pendingMemos = [];
+  var drivers = [];
+  var rateItems = [];
+  var channel = null;
+  var memoChannel = null;
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  var STATUS_LABEL = { running: "運行中", done: "完了", revising: "修正中" };
+
+  async function init() {
+    profile = await requireProfile("office");
+    if (!profile) return;
+    document.getElementById("office-name-display").textContent = profile.name + " さん";
+    document.getElementById("date-input").value = todayKey();
+
+    var [{ data: driverRows }, { data: rateRows }] = await Promise.all([
+      supabaseClient.from("profiles").select("*").eq("role", "driver").order("name"),
+      supabaseClient.from("rate_items").select("*")
+    ]);
+    drivers = driverRows || [];
+    rateItems = rateRows || [];
+
+    document.getElementById("date-input").addEventListener("change", loadData);
+    document.getElementById("refresh-btn").addEventListener("click", loadData);
+    document.getElementById("logout-btn").addEventListener("click", signOut);
+    document.getElementById("rows-body").addEventListener("click", onConfirmClick);
+    document.getElementById("memo-list").addEventListener("click", onAssignClick);
+
+    subscribeRealtime();
+    await loadData();
+  }
+
+  function subscribeRealtime() {
+    channel = supabaseClient
+      .channel("office_rows")
+      .on("postgres_changes", { event: "*", schema: "public", table: "report_rows" }, function () {
+        loadData();
+      })
+      .subscribe();
+    memoChannel = supabaseClient
+      .channel("office_memos")
+      .on("postgres_changes", { event: "*", schema: "public", table: "dispatch_memo_items" }, function () {
+        loadData();
+      })
+      .subscribe();
+  }
+
+  async function loadData() {
+    document.getElementById("loading").style.display = "block";
+    document.getElementById("content").style.display = "none";
+
+    var dateKey = document.getElementById("date-input").value;
+    document.getElementById("office-date-display").textContent = todayLabel(dateKey);
+
+    var [{ data, error }, { data: memoData, error: memoError }] = await Promise.all([
+      supabaseClient
+        .from("report_rows")
+        .select("*, customers(name), report_days!inner(report_date, vehicle_no, driver_id, profiles(name))")
+        .eq("report_days.report_date", dateKey)
+        .order("updated_at", { ascending: false }),
+      supabaseClient
+        .from("dispatch_memo_items")
+        .select("*, customers(name)")
+        .eq("memo_date", dateKey)
+        .eq("assigned", false)
+        .order("created_at", { ascending: true })
+    ]);
+
+    if (error) { console.error(error); document.getElementById("loading").textContent = "読み込みに失敗しました: " + error.message; return; }
+    if (memoError) console.error(memoError);
+
+    rows = data || [];
+    pendingMemos = memoData || [];
+    renderMemoPanel();
+    renderFeed();
+    renderTable();
+
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("content").style.display = "block";
+  }
+
+  function renderMemoPanel() {
+    var el = document.getElementById("memo-list");
+    if (pendingMemos.length === 0) {
+      el.innerHTML = '<div style="color:#94a3b8;font-size:13px;">未割当の配車メモはありません</div>';
+      return;
+    }
+    var driverOptions = '<option value="">ドライバーを選択</option>' +
+      drivers.map(function (d) { return '<option value="' + d.id + '">' + esc(d.name) + "</option>"; }).join("");
+
+    el.innerHTML = pendingMemos.map(function (m) {
+      var customerName = m.customers ? m.customers.name : "(荷主未設定)";
+      return (
+        '<div style="padding:8px 4px;border-bottom:1px dashed var(--border);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">' +
+          '<div style="font-size:13px;">' +
+            "<strong>" + esc(customerName) + "</strong>　" +
+            esc(m.origin || "-") + " → " + esc(m.destination || "-") + "　" +
+            esc(m.item_name || "-") + "　" + (m.quantity == null ? "-" : m.quantity) +
+            (m.note ? '　<span style="color:#94a3b8;">(' + esc(m.note) + ")</span>" : "") +
+          "</div>" +
+          '<div style="display:flex;gap:6px;align-items:center;">' +
+            '<select data-driver-for="' + m.id + '" style="padding:6px;border:1px solid var(--border);border-radius:6px;font-family:inherit;">' + driverOptions + "</select>" +
+            '<button class="btn btn-small btn-primary" data-assign="' + m.id + '">割り当てる</button>' +
+          "</div>" +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  async function onAssignClick(e) {
+    var memoId = e.target.getAttribute("data-assign");
+    if (!memoId) return;
+    var select = document.querySelector('[data-driver-for="' + memoId + '"]');
+    var driverId = select ? select.value : "";
+    if (!driverId) { alert("割り当てるドライバーを選択してください。"); return; }
+
+    var memo = pendingMemos.find(function (m) { return m.id === memoId; });
+    if (!memo) return;
+
+    var { data: existingDay } = await supabaseClient
+      .from("report_days").select("*")
+      .eq("driver_id", driverId).eq("report_date", memo.memo_date).maybeSingle();
+
+    var reportDayId;
+    if (existingDay) {
+      reportDayId = existingDay.id;
+    } else {
+      var driverProfile = drivers.find(function (d) { return d.id === driverId; });
+      var { data: createdDay, error: dayErr } = await supabaseClient
+        .from("report_days")
+        .insert({ driver_id: driverId, report_date: memo.memo_date, vehicle_no: driverProfile ? driverProfile.vehicle_no : null })
+        .select().single();
+      if (dayErr) { alert("配車日報の作成に失敗しました: " + dayErr.message); return; }
+      reportDayId = createdDay.id;
+    }
+
+    var { count } = await supabaseClient
+      .from("report_rows").select("id", { count: "exact", head: true })
+      .eq("report_day_id", reportDayId);
+
+    var match = rateItems.find(function (r) {
+      return r.customer_id === memo.customer_id && r.destination === memo.destination && r.item_name === memo.item_name;
+    });
+
+    var { data: newRow, error: rowErr } = await supabaseClient
+      .from("report_rows")
+      .insert({
+        report_day_id: reportDayId,
+        seq: count || 0,
+        customer_id: memo.customer_id,
+        origin: memo.origin,
+        destination: memo.destination,
+        item_name: memo.item_name,
+        quantity: memo.quantity,
+        unit_price: match ? match.unit_price : null,
+        note: memo.note,
+        status: "running"
+      })
+      .select().single();
+    if (rowErr) { alert("明細行の作成に失敗しました: " + rowErr.message); return; }
+
+    var { error: memoErr } = await supabaseClient
+      .from("dispatch_memo_items")
+      .update({ assigned: true, assigned_driver_id: driverId, assigned_report_row_id: newRow.id })
+      .eq("id", memoId);
+    if (memoErr) { alert("配車メモの更新に失敗しました: " + memoErr.message); return; }
+
+    await loadData();
+  }
+
+  function renderFeed() {
+    var listEl = document.getElementById("notif-list");
+    if (rows.length === 0) {
+      listEl.innerHTML = '<li style="color:#94a3b8;">アクティビティはまだありません</li>';
+      return;
+    }
+    listEl.innerHTML = rows.slice(0, 10).map(function (row) {
+      var driverName = row.report_days && row.report_days.profiles ? row.report_days.profiles.name : "-";
+      var customerName = row.customers ? row.customers.name : "(荷主未設定)";
+      var cls = row.status === "revising" ? "unread" : "";
+      return (
+        '<li class="' + cls + '">' +
+          "<span>" + esc(driverName) + " さんが「" + esc(customerName) + "」を更新（" + STATUS_LABEL[row.status] + "）</span>" +
+          '<span class="notif-time">' + timeLabel(row.updated_at) + "</span>" +
+        "</li>"
+      );
+    }).join("");
+  }
+
+  function renderTable() {
+    var tbody = document.getElementById("rows-body");
+    var emptyEl = document.getElementById("empty-state");
+    if (rows.length === 0) {
+      tbody.innerHTML = "";
+      emptyEl.style.display = "block";
+      document.getElementById("total-label").textContent = "";
+      return;
+    }
+    emptyEl.style.display = "none";
+
+    var sorted = rows.slice().sort(function (a, b) {
+      var an = a.report_days && a.report_days.profiles ? a.report_days.profiles.name : "";
+      var bn = b.report_days && b.report_days.profiles ? b.report_days.profiles.name : "";
+      if (an !== bn) return an < bn ? -1 : 1;
+      return (a.seq || 0) - (b.seq || 0);
+    });
+
+    var total = 0;
+    tbody.innerHTML = sorted.map(function (row) {
+      total += Number(row.amount || 0);
+      var driverName = row.report_days && row.report_days.profiles ? row.report_days.profiles.name : "-";
+      var vehicleNo = row.report_days ? row.report_days.vehicle_no : "";
+      var customerName = row.customers ? row.customers.name : "-";
+      var action = row.status === "revising"
+        ? '<button class="btn btn-small" data-action="confirm">確認して完了にする</button>'
+        : "-";
+      return (
+        '<tr data-id="' + row.id + '">' +
+          "<td>" + esc(driverName) + "</td>" +
+          "<td>" + esc(vehicleNo || "-") + "</td>" +
+          '<td><span class="badge badge-' + row.status + '">' + STATUS_LABEL[row.status] + "</span></td>" +
+          "<td>" + esc(customerName) + "</td>" +
+          "<td>" + esc(row.origin || "-") + "</td>" +
+          "<td>" + esc(row.destination || "-") + "</td>" +
+          "<td>" + esc(row.item_name || "-") + "</td>" +
+          "<td>" + (row.quantity == null ? "-" : row.quantity) + "</td>" +
+          '<td class="amount-cell">' + yen(row.unit_price) + "</td>" +
+          '<td class="amount-cell">' + yen(row.amount) + "</td>" +
+          "<td>" + esc(row.note || "-") + "</td>" +
+          "<td>" + timeLabel(row.updated_at) + "</td>" +
+          "<td>" + action + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+
+    document.getElementById("total-label").textContent = "この日の合計: " + yen(total) + "（" + rows.length + "件）";
+  }
+
+  async function onConfirmClick(e) {
+    if (e.target.getAttribute("data-action") !== "confirm") return;
+    var tr = e.target.closest("tr");
+    var id = tr.getAttribute("data-id");
+    var { error } = await supabaseClient.from("report_rows").update({ status: "done" }).eq("id", id);
+    if (error) { alert("更新に失敗しました: " + error.message); return; }
+    await loadData();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

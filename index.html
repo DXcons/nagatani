@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>株式会社ながたに 配車日報</title>
+  <style>
+    body {
+      font-family: "Yu Gothic", "Hiragino Sans", "Meiryo", system-ui, sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      min-height: 100vh; background: #f8fafc; margin: 0;
+    }
+    p { color: #64748b; font-size: 15px; }
+  </style>
+</head>
+<body>
+  <p>読み込み中...</p>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="js/supabase.js"></script>
+  <script>
+    (async () => {
+      const profile = await getMyProfile();
+      if (!profile) {
+        window.location.href = "login.html";
+        return;
+      }
+      window.location.href = ROLE_PAGE[profile.role] || "driver.html";
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>配車メモ入力｜株式会社ながたに</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+  .sheet-card { margin-bottom: 22px; }
+  .sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
+  .sheet-head .name { font-size: 15px; font-weight: 700; }
+  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 12px; padding: 0; font-family: inherit; }
+  .grid-table th, .grid-table td { text-align: center; }
+  .grid-table th:first-child, .grid-table td:first-child { text-align: left; white-space: nowrap; }
+  .grid-table input[type="number"] { width: 70px; text-align: right; }
+  .grid-table input[type="text"], .grid-table input:not([type]) { width: 130px; }
+  .col-head-name { display: inline-flex; align-items: center; gap: 4px; }
+  .add-col-select { padding: 6px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: 12px; width: 130px; }
+  .add-sheet-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 20px; }
+  .tab-bar { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tab-btn {
+    padding: 6px 14px; border-radius: 999px; border: 1px solid var(--border); background: #fff;
+    cursor: pointer; font-size: 13px; font-family: inherit; color: #475569;
+  }
+  .tab-btn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <h1>📋 配車メモ入力</h1>
+  <nav>
+    <a class="btn btn-small" href="destinations.html">配送先リスト</a>
+    <a class="btn btn-small" href="box_types.html">品名リスト</a>
+    <button class="btn btn-small" id="logout-btn">ログアウト</button>
+  </nav>
+</header>
+
+<div class="container">
+  <div class="page-header">
+    <div>
+      <div class="who" id="haisya-name-display">-</div>
+      <div class="date" id="date-display"></div>
+    </div>
+    <div class="toolbar">
+      <label style="font-size:13px;color:#475569;">対象日
+        <input type="date" id="date-input">
+      </label>
+    </div>
+  </div>
+
+  <div class="add-sheet-bar">
+    <select id="add-sheet-customer" style="padding:8px;border:1px solid #e2e8f0;border-radius:8px;min-width:180px;"></select>
+    <button class="btn btn-primary btn-small" id="add-sheet-btn">＋ 新しい表を追加</button>
+  </div>
+
+  <div id="loading" class="loading-state">読み込み中...</div>
+  <div id="sheets-container" style="display:none;"></div>
+  <div id="empty-state" class="empty-state" style="display:none;">この日の表はまだありません。上の「＋ 新しい表を追加」から荷主を選んで作成してください。</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/supabase.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var profile = null;
+  var customers = [];
+  var destinationsMaster = [];
+  var boxTypesMaster = [];
+  var sheets = [];
+  var columnsBySheet = {};
+  var itemsBySheet = {};
+  var ratesBySheet = {};
+  var blocksBySheet = {};
+  var activeTabBySheet = {};
+  var extraBlankRows = {};
+  var blankSlotSeq = 0;
+  var backfilledSheetIds = {};
+  var channel = null;
+
+  var TABS = ["200円", "250円", "280円", "380円", "その他"];
+
+  function blankKey(sheetId, tab) { return sheetId + "::" + tab; }
+
+  function getBlankSlots(sheetId, tab) {
+    var k = blankKey(sheetId, tab);
+    if (!extraBlankRows[k]) extraBlankRows[k] = ["b" + (blankSlotSeq++)];
+    return extraBlankRows[k];
+  }
+
+  function graduateBlankSlot(tr, sheetId) {
+    var slotId = tr.getAttribute("data-blank-slot");
+    if (!slotId) return;
+    var k = blankKey(sheetId, activeTabBySheet[sheetId]);
+    if (extraBlankRows[k]) {
+      extraBlankRows[k] = extraBlankRows[k].filter(function (s) { return s !== slotId; });
+    }
+  }
+
+  function groupOfDestination(name) {
+    var d = destinationsMaster.find(function (x) { return x.name === name; });
+    var g = d ? d.rate_group : null;
+    return TABS.indexOf(g) !== -1 ? g : "その他";
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  async function init() {
+    profile = await requireProfile("haisya");
+    if (!profile) return;
+    document.getElementById("haisya-name-display").textContent = profile.name + " さん";
+    document.getElementById("date-input").value = todayKey();
+
+    var [{ data: customerRows }, { data: destRows }, { data: boxRows }] = await Promise.all([
+      supabaseClient.from("customers").select("*").order("name"),
+      supabaseClient.from("destinations").select("*").order("name"),
+      supabaseClient.from("box_types").select("*").order("sort_order").order("name")
+    ]);
+    customers = customerRows || [];
+    destinationsMaster = destRows || [];
+    boxTypesMaster = boxRows || [];
+
+    document.getElementById("date-input").addEventListener("change", loadDate);
+    document.getElementById("add-sheet-btn").addEventListener("click", onAddSheet);
+    document.getElementById("logout-btn").addEventListener("click", signOut);
+    document.getElementById("sheets-container").addEventListener("change", onContainerChange);
+    document.getElementById("sheets-container").addEventListener("click", onContainerClick);
+
+    subscribeRealtime();
+    await loadDate();
+  }
+
+  function subscribeRealtime() {
+    channel = supabaseClient
+      .channel("haisya_sheets")
+      .on("postgres_changes", { event: "*", schema: "public", table: "dispatch_memo_items" }, function () { loadDate(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "memo_sheets" }, function () { loadDate(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "memo_sheet_columns" }, function () { loadDate(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "memo_sheet_rates" }, function () { loadDate(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "memo_sheet_blocks" }, function () { loadDate(); })
+      .subscribe();
+  }
+
+  function dateKey() { return document.getElementById("date-input").value; }
+
+  async function loadDate() {
+    document.getElementById("loading").style.display = "block";
+    document.getElementById("sheets-container").style.display = "none";
+    document.getElementById("empty-state").style.display = "none";
+
+    document.getElementById("date-display").textContent = todayLabel(dateKey());
+
+    var { data: sheetRows, error: sheetErr } = await supabaseClient
+      .from("memo_sheets")
+      .select("*, customers(name)")
+      .eq("memo_date", dateKey())
+      .order("created_at");
+    if (sheetErr) { alert("表の取得に失敗しました: " + sheetErr.message); return; }
+    sheets = sheetRows || [];
+
+    if (sheets.length === 0) {
+      var hokusui = customers.find(function (c) { return c.name === "ホクスイ"; });
+      if (hokusui) {
+        await createSheetWithColumns(hokusui.id);
+        var { data: sheetRows2 } = await supabaseClient
+          .from("memo_sheets").select("*, customers(name)")
+          .eq("memo_date", dateKey()).order("created_at");
+        sheets = sheetRows2 || [];
+      }
+    }
+
+    columnsBySheet = {};
+    itemsBySheet = {};
+    ratesBySheet = {};
+    blocksBySheet = {};
+    if (sheets.length > 0) {
+      var sheetIds = sheets.map(function (s) { return s.id; });
+      var [{ data: colRows }, { data: itemRows }, { data: rateRows }, { data: blockRows }] = await Promise.all([
+        supabaseClient.from("memo_sheet_columns").select("*").in("sheet_id", sheetIds).order("sort_order"),
+        supabaseClient.from("dispatch_memo_items").select("*").in("memo_sheet_id", sheetIds).eq("assigned", false),
+        supabaseClient.from("memo_sheet_rates").select("*").in("sheet_id", sheetIds),
+        supabaseClient.from("memo_sheet_blocks").select("*").in("sheet_id", sheetIds)
+      ]);
+      (colRows || []).forEach(function (c) {
+        if (!columnsBySheet[c.sheet_id]) columnsBySheet[c.sheet_id] = [];
+        columnsBySheet[c.sheet_id].push(c);
+      });
+      (itemRows || []).forEach(function (it) {
+        if (!itemsBySheet[it.memo_sheet_id]) itemsBySheet[it.memo_sheet_id] = [];
+        itemsBySheet[it.memo_sheet_id].push(it);
+      });
+      (rateRows || []).forEach(function (r) {
+        if (!ratesBySheet[r.sheet_id]) ratesBySheet[r.sheet_id] = [];
+        ratesBySheet[r.sheet_id].push(r);
+      });
+      (blockRows || []).forEach(function (b) {
+        if (!blocksBySheet[b.sheet_id]) blocksBySheet[b.sheet_id] = [];
+        blocksBySheet[b.sheet_id].push(b);
+      });
+
+      // 既定6品目×4グループのうち、まだ単価が登録されていない組み合わせにだけ規定単価（200/250/280/380）を自動投入する
+      // （このブラウザセッションで投入確認済みの表は対象外＝手動で空欄にした値を毎回書き戻さないため）
+      var sheetsToCheck = sheets.filter(function (s) { return !backfilledSheetIds[s.id]; });
+      var missingRates = [];
+      sheetsToCheck.forEach(function (sheet) {
+        var names = defaultRowNames();
+        var existing = ratesBySheet[sheet.id] || [];
+        TABS.forEach(function (tab) {
+          var num = parseInt(tab, 10);
+          if (!num) return;
+          names.forEach(function (name) {
+            var found = existing.some(function (r) { return r.rate_group === tab && r.item_name === name; });
+            if (!found) missingRates.push({ sheet_id: sheet.id, rate_group: tab, item_name: name, unit_price: num });
+          });
+        });
+      });
+      if (missingRates.length > 0) {
+        var { error: backfillErr } = await supabaseClient.from("memo_sheet_rates").insert(missingRates);
+        if (backfillErr) {
+          console.error("単価の自動投入に失敗しました:", backfillErr);
+        } else {
+          var { data: rateRows2 } = await supabaseClient.from("memo_sheet_rates").select("*").in("sheet_id", sheetIds);
+          ratesBySheet = {};
+          (rateRows2 || []).forEach(function (r) {
+            if (!ratesBySheet[r.sheet_id]) ratesBySheet[r.sheet_id] = [];
+            ratesBySheet[r.sheet_id].push(r);
+          });
+          sheetsToCheck.forEach(function (s) { backfilledSheetIds[s.id] = true; });
+        }
+      } else {
+        sheetsToCheck.forEach(function (s) { backfilledSheetIds[s.id] = true; });
+      }
+    }
+
+    renderAddSheetSelect();
+    render();
+
+    document.getElementById("loading").style.display = "none";
+    if (sheets.length === 0) {
+      document.getElementById("empty-state").style.display = "block";
+    } else {
+      document.getElementById("sheets-container").style.display = "block";
+    }
+  }
+
+  function renderAddSheetSelect() {
+    var usedCustomerIds = {};
+    sheets.forEach(function (s) { usedCustomerIds[s.customer_id] = true; });
+    var available = customers.filter(function (c) { return !usedCustomerIds[c.id]; });
+    var sel = document.getElementById("add-sheet-customer");
+    sel.innerHTML = '<option value="">(荷主を選択)</option>' +
+      available.map(function (c) { return '<option value="' + c.id + '">' + esc(c.name) + "</option>"; }).join("");
+  }
+
+  function defaultRowNames() {
+    return boxTypesMaster.filter(function (b) { return b.is_default; }).map(function (b) { return b.name; });
+  }
+
+  function rowNamesForSheet(sheetId, activeTab) {
+    var names = defaultRowNames();
+    var seen = {};
+    names.forEach(function (n) { seen[n] = true; });
+    (itemsBySheet[sheetId] || []).forEach(function (it) {
+      if (it.item_name && !seen[it.item_name] && groupOfDestination(it.destination) === activeTab) {
+        seen[it.item_name] = true; names.push(it.item_name);
+      }
+    });
+    return names;
+  }
+
+  function findItem(sheetId, itemName, destination) {
+    return (itemsBySheet[sheetId] || []).find(function (it) { return it.item_name === itemName && it.destination === destination; });
+  }
+
+  function findRate(sheetId, rateGroup, itemName) {
+    return (ratesBySheet[sheetId] || []).find(function (r) { return r.rate_group === rateGroup && r.item_name === itemName; });
+  }
+
+  function findBlock(sheetId, rateGroup) {
+    return (blocksBySheet[sheetId] || []).find(function (b) { return b.rate_group === rateGroup; });
+  }
+
+  function rowItemName(tr) {
+    if (tr.hasAttribute("data-fixed-item")) return tr.getAttribute("data-fixed-item");
+    var labelInput = tr.querySelector("[data-blank-item]");
+    return labelInput ? labelInput.value.trim() : "";
+  }
+
+  function render() {
+    var container = document.getElementById("sheets-container");
+    container.innerHTML = sheets.map(function (sheet) {
+      if (!(sheet.id in activeTabBySheet)) activeTabBySheet[sheet.id] = TABS[0];
+      var activeTab = activeTabBySheet[sheet.id];
+      var tabPlaceholder = parseInt(activeTab, 10) || "";
+
+      var allCols = columnsBySheet[sheet.id] || [];
+      var cols = allCols.filter(function (c) { return groupOfDestination(c.destination) === activeTab; });
+      var rowNames = rowNamesForSheet(sheet.id, activeTab);
+      var customerName = sheet.customers ? sheet.customers.name : "(荷主未設定)";
+      var usedDestNames = {};
+      allCols.forEach(function (c) { usedDestNames[c.destination] = true; });
+      var availableDests = destinationsMaster.filter(function (d) {
+        return !usedDestNames[d.name] && groupOfDestination(d.name) === activeTab;
+      });
+
+      var tabBar = '<div class="tab-bar">' + TABS.map(function (t) {
+        return '<button type="button" class="tab-btn' + (t === activeTab ? " active" : "") +
+          '" data-tab-for="' + sheet.id + '" data-tab-name="' + t + '">' + t + "</button>";
+      }).join("") + "</div>";
+
+      var headerCols = cols.map(function (c) {
+        return '<th><span class="col-head-name">' + esc(c.destination) +
+          ' <button class="del-link" data-delete-col-sheet="' + sheet.id + '" data-delete-col-dest="' + esc(c.destination) + '" data-delete-col-id="' + c.id + '">✕</button></span></th>';
+      }).join("");
+
+      var addColSelect = '<th><select class="add-col-select" data-add-col-for="' + sheet.id + '">' +
+        '<option value="">＋列を追加</option>' +
+        availableDests.map(function (d) { return '<option value="' + esc(d.name) + '">' + esc(d.name) + "</option>"; }).join("") +
+        "</select></th>";
+
+      var defaultNames = defaultRowNames();
+      var bodyRows = rowNames.map(function (name) {
+        var rowSum = 0;
+        var cells = cols.map(function (c) {
+          var it = findItem(sheet.id, name, c.destination);
+          var qty = it && it.quantity != null ? Number(it.quantity) : null;
+          if (qty != null) rowSum += qty;
+          return '<td><input type="number" step="any" data-cell data-dest="' + esc(c.destination) + '" value="' + (qty == null ? "" : qty) + '"></td>';
+        }).join("");
+        var rate = findRate(sheet.id, activeTab, name);
+        var unitPrice = rate && rate.unit_price != null ? rate.unit_price : "";
+        var rowAmount = (unitPrice === "" ? 0 : Number(unitPrice)) * rowSum;
+        var isDefault = defaultNames.indexOf(name) !== -1;
+        var rowDeleteBtn = isDefault ? "" :
+          '<button class="del-link" data-delete-row-sheet="' + sheet.id + '" data-delete-row-name="' + esc(name) + '">✕</button>';
+        return (
+          '<tr data-fixed-item="' + esc(name) + '"><td>' + esc(name) + "</td>" +
+          '<td><input type="number" step="any" data-rate value="' + unitPrice + '" placeholder="' + tabPlaceholder + '"></td>' +
+          cells + "<td>" + rowDeleteBtn + "</td>" +
+          '<td class="amount-cell">' + rowSum + "</td>" +
+          '<td class="amount-cell">' + yen(rowAmount) + "</td></tr>"
+        );
+      }).join("");
+
+      var colSums = cols.map(function (c) {
+        var sum = 0;
+        rowNames.forEach(function (name) {
+          var it = findItem(sheet.id, name, c.destination);
+          if (it && it.quantity != null) sum += Number(it.quantity);
+        });
+        return sum;
+      });
+      var footerRow = '<tr><td>個数縦合計</td><td></td>' +
+        colSums.map(function (s) { return '<td class="amount-cell">' + s + "</td>"; }).join("") +
+        "<td></td><td></td><td></td></tr>";
+
+      var blankSlots = getBlankSlots(sheet.id, activeTab);
+      var blankRows = blankSlots.map(function (slotId) {
+        var blankCells = cols.map(function (c) {
+          return '<td><input type="number" step="any" data-cell data-dest="' + esc(c.destination) + '"></td>';
+        }).join("");
+        return '<tr data-blank-slot="' + slotId + '"><td><input type="text" list="boxtype-list-' + sheet.id + '" data-blank-item placeholder="品名を選択 or 入力"></td>' +
+          '<td><input type="number" step="any" data-rate placeholder="' + tabPlaceholder + '"></td>' +
+          blankCells +
+          '<td><button class="del-link" data-delete-blank-sheet="' + sheet.id + '" data-delete-blank-tab="' + activeTab + '" data-delete-blank-slot="' + slotId + '">✕</button></td>' +
+          '<td class="amount-cell">0</td><td class="amount-cell">¥0</td></tr>';
+      }).join("");
+      var addRowBar = '<div style="margin:8px 0;"><button type="button" class="btn btn-small" data-add-blank-sheet="' + sheet.id + '" data-add-blank-tab="' + activeTab + '">＋ 空欄行を追加</button></div>';
+
+      var block = findBlock(sheet.id, activeTab);
+      var noteValue = block ? (block.note || "") : "";
+      var noteColspan = cols.length + 4;
+      var noteRow = '<tr><td>備考欄</td><td colspan="' + noteColspan + '">' +
+        '<input type="text" data-note value="' + esc(noteValue) + '" style="width:100%;box-sizing:border-box;" placeholder="自由記載"></td></tr>';
+
+      var datalist = '<datalist id="boxtype-list-' + sheet.id + '">' +
+        boxTypesMaster.map(function (b) { return '<option value="' + esc(b.name) + '">'; }).join("") + "</datalist>";
+
+      return (
+        '<div class="card sheet-card" data-sheet-id="' + sheet.id + '">' +
+          '<div class="sheet-head">' +
+            '<div class="name">' + esc(customerName) + "</div>" +
+            '<button class="del-link" data-delete-sheet="' + sheet.id + '">この表を削除</button>' +
+          "</div>" +
+          tabBar +
+          '<div class="table-wrap"><table class="grid-table">' +
+            "<thead><tr><th>品名＼着地</th><th>単価</th>" + headerCols + addColSelect + "<th>個数横合計</th><th>合計金額</th></tr></thead>" +
+            "<tbody>" + bodyRows + blankRows + footerRow + noteRow + "</tbody>" +
+          "</table></div>" +
+          addRowBar +
+          datalist +
+        "</div>"
+      );
+    }).join("");
+  }
+
+  async function createSheetWithColumns(customerId) {
+    var { data: sheet, error } = await supabaseClient
+      .from("memo_sheets")
+      .insert({ memo_date: dateKey(), customer_id: customerId, created_by: profile.id })
+      .select().single();
+    if (error) { return error; }
+    if (destinationsMaster.length > 0) {
+      var rows = destinationsMaster.map(function (d, idx) {
+        return { sheet_id: sheet.id, destination: d.name, sort_order: idx };
+      });
+      await supabaseClient.from("memo_sheet_columns").insert(rows);
+    }
+    return null;
+  }
+
+  async function onAddSheet() {
+    var customerId = document.getElementById("add-sheet-customer").value;
+    if (!customerId) { alert("荷主を選択してください。"); return; }
+    var error = await createSheetWithColumns(customerId);
+    if (error) { alert("表の作成に失敗しました: " + error.message); return; }
+    await loadDate();
+  }
+
+  async function onContainerChange(e) {
+    if (e.target.hasAttribute("data-cell")) { await onCellChange(e); return; }
+    if (e.target.hasAttribute("data-rate")) { await onRateChange(e); return; }
+    if (e.target.hasAttribute("data-note")) { await onNoteChange(e); return; }
+    var sheetId = e.target.getAttribute("data-add-col-for");
+    if (sheetId && e.target.value) {
+      var destName = e.target.value;
+      var currentCols = columnsBySheet[sheetId] || [];
+      var { error } = await supabaseClient.from("memo_sheet_columns").insert({
+        sheet_id: sheetId, destination: destName, sort_order: currentCols.length
+      });
+      if (error) { alert("列の追加に失敗しました: " + error.message); }
+      await loadDate();
+    }
+  }
+
+  async function onCellChange(e) {
+    var td = e.target;
+    var tr = td.closest("tr");
+    var card = td.closest("[data-sheet-id]");
+    var sheetId = card.getAttribute("data-sheet-id");
+    var destName = td.getAttribute("data-dest");
+    var itemName = rowItemName(tr);
+    if (!itemName) { alert("先に品名を選択または入力してください。"); td.value = ""; return; }
+
+    var sheet = sheets.find(function (s) { return s.id === sheetId; });
+    var existing = findItem(sheetId, itemName, destName);
+    var raw = td.value;
+    var qty = raw === "" ? null : Number(raw);
+
+    if (qty === null) {
+      if (existing) await supabaseClient.from("dispatch_memo_items").delete().eq("id", existing.id);
+    } else if (existing) {
+      await supabaseClient.from("dispatch_memo_items").update({ quantity: qty }).eq("id", existing.id);
+    } else {
+      var { error } = await supabaseClient.from("dispatch_memo_items").insert({
+        memo_date: dateKey(), customer_id: sheet.customer_id, memo_sheet_id: sheetId,
+        destination: destName, item_name: itemName, quantity: qty, created_by: profile.id
+      });
+      if (error) { alert("保存に失敗しました: " + error.message); }
+      else { graduateBlankSlot(tr, sheetId); }
+    }
+    await loadDate();
+  }
+
+  async function onRateChange(e) {
+    var td = e.target;
+    var tr = td.closest("tr");
+    var card = td.closest("[data-sheet-id]");
+    var sheetId = card.getAttribute("data-sheet-id");
+    var itemName = rowItemName(tr);
+    if (!itemName) { alert("先に品名を選択または入力してください。"); td.value = ""; return; }
+
+    var activeTab = activeTabBySheet[sheetId];
+    var existing = findRate(sheetId, activeTab, itemName);
+    var raw = td.value;
+    var price = raw === "" ? null : Number(raw);
+
+    if (price === null) {
+      if (existing) await supabaseClient.from("memo_sheet_rates").delete().eq("id", existing.id);
+    } else if (existing) {
+      await supabaseClient.from("memo_sheet_rates").update({ unit_price: price }).eq("id", existing.id);
+    } else {
+      var { error } = await supabaseClient.from("memo_sheet_rates").insert({
+        sheet_id: sheetId, rate_group: activeTab, item_name: itemName, unit_price: price
+      });
+      if (error) { alert("保存に失敗しました: " + error.message); }
+    }
+    await loadDate();
+  }
+
+  async function onNoteChange(e) {
+    var card = e.target.closest("[data-sheet-id]");
+    var sheetId = card.getAttribute("data-sheet-id");
+    var activeTab = activeTabBySheet[sheetId];
+    var note = e.target.value;
+    var existing = findBlock(sheetId, activeTab);
+
+    if (existing) {
+      await supabaseClient.from("memo_sheet_blocks").update({ note: note }).eq("id", existing.id);
+    } else {
+      var { error } = await supabaseClient.from("memo_sheet_blocks").insert({
+        sheet_id: sheetId, rate_group: activeTab, note: note
+      });
+      if (error) { alert("保存に失敗しました: " + error.message); }
+    }
+    await loadDate();
+  }
+
+  async function onContainerClick(e) {
+    var tabSheetId = e.target.getAttribute("data-tab-for");
+    var tabName = e.target.getAttribute("data-tab-name");
+    if (tabSheetId && tabName) {
+      activeTabBySheet[tabSheetId] = tabName;
+      render();
+      return;
+    }
+
+    var addBlankSheetId = e.target.getAttribute("data-add-blank-sheet");
+    var addBlankTab = e.target.getAttribute("data-add-blank-tab");
+    if (addBlankSheetId && addBlankTab) {
+      getBlankSlots(addBlankSheetId, addBlankTab).push("b" + (blankSlotSeq++));
+      render();
+      return;
+    }
+
+    var delBlankSheetId = e.target.getAttribute("data-delete-blank-sheet");
+    var delBlankTab = e.target.getAttribute("data-delete-blank-tab");
+    var delBlankSlot = e.target.getAttribute("data-delete-blank-slot");
+    if (delBlankSheetId && delBlankTab && delBlankSlot) {
+      var k = blankKey(delBlankSheetId, delBlankTab);
+      extraBlankRows[k] = getBlankSlots(delBlankSheetId, delBlankTab).filter(function (s) { return s !== delBlankSlot; });
+      render();
+      return;
+    }
+
+    var delRowSheetId = e.target.getAttribute("data-delete-row-sheet");
+    var delRowName = e.target.getAttribute("data-delete-row-name");
+    if (delRowSheetId && delRowName) {
+      if (!confirm("「" + delRowName + "」の行を削除しますか？入力済みの数量もすべて削除されます。")) return;
+      var activeTab = activeTabBySheet[delRowSheetId];
+      var destNames = (columnsBySheet[delRowSheetId] || [])
+        .filter(function (c) { return groupOfDestination(c.destination) === activeTab; })
+        .map(function (c) { return c.destination; });
+      if (destNames.length > 0) {
+        await supabaseClient.from("dispatch_memo_items").delete()
+          .eq("memo_sheet_id", delRowSheetId).eq("item_name", delRowName)
+          .eq("assigned", false).in("destination", destNames);
+      }
+      await supabaseClient.from("memo_sheet_rates").delete()
+        .eq("sheet_id", delRowSheetId).eq("rate_group", activeTab).eq("item_name", delRowName);
+      await loadDate();
+      return;
+    }
+
+    var delSheetId = e.target.getAttribute("data-delete-sheet");
+    if (delSheetId) {
+      if (!confirm("この表を削除しますか？（すでに入力した数量データはそのまま残ります）")) return;
+      var { error } = await supabaseClient.from("memo_sheets").delete().eq("id", delSheetId);
+      if (error) { alert("削除に失敗しました: " + error.message); return; }
+      await loadDate();
+      return;
+    }
+    var delColSheetId = e.target.getAttribute("data-delete-col-sheet");
+    var delColDest = e.target.getAttribute("data-delete-col-dest");
+    var delColId = e.target.getAttribute("data-delete-col-id");
+    if (delColSheetId && delColDest) {
+      if (!confirm("この列（" + delColDest + "）を削除しますか？入力済みの数量も削除されます。")) return;
+      await supabaseClient.from("dispatch_memo_items").delete()
+        .eq("memo_sheet_id", delColSheetId).eq("destination", delColDest).eq("assigned", false);
+      var { error } = await supabaseClient.from("memo_sheet_columns").delete().eq("id", delColId);
+      if (error) { alert("削除に失敗しました: " + error.message); return; }
+      await loadDate();
+    }
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

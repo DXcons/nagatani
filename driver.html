@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>配車日報入力｜株式会社ながたに</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>🚚 配車日報入力</h1>
+  <nav>
+    <button class="btn btn-small" id="logout-btn">ログアウト</button>
+  </nav>
+</header>
+
+<div class="container">
+  <div class="page-header">
+    <div>
+      <div class="who" id="driver-name-display">-</div>
+      <div class="date" id="driver-vehicle-display"></div>
+    </div>
+    <div class="toolbar">
+      <label style="font-size:13px;color:#475569;">対象日
+        <input type="date" id="date-input">
+      </label>
+      <label style="font-size:13px;color:#475569;">車番
+        <input type="text" id="vehicle-input" style="width:80px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;">
+      </label>
+    </div>
+  </div>
+
+  <div id="loading" class="loading-state">読み込み中...</div>
+
+  <div id="content" style="display:none;">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:80px;">状態</th>
+            <th style="min-width:140px;">荷主</th>
+            <th style="width:100px;">発地</th>
+            <th style="min-width:130px;">着地</th>
+            <th style="min-width:130px;">品名</th>
+            <th style="width:90px;">数量</th>
+            <th style="width:100px;">請求単価</th>
+            <th style="width:100px;">金額</th>
+            <th style="min-width:120px;">備考</th>
+            <th style="width:170px;">操作</th>
+          </tr>
+        </thead>
+        <tbody id="rows-body"></tbody>
+      </table>
+      <div id="empty-state" class="empty-state" style="display:none;">まだ行がありません。「＋ 行を追加」から今日の実績を記録しましょう。</div>
+    </div>
+    <div class="add-row-wrap">
+      <button class="btn btn-primary" id="add-row-btn">＋ 行を追加</button>
+      <span id="total-label" style="color:#64748b;font-size:13px;"></span>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/supabase.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var profile = null;
+  var reportDayId = null;
+  var rows = [];
+  var customers = [];
+  var rateItems = [];
+  var rowsChannel = null;
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  var STATUS_LABEL = { running: "運行中", done: "完了", revising: "修正中" };
+  function statusHint(status) {
+    if (status === "running") return "（完了として通知されます）";
+    if (status === "done") return "（修正として通知されます）";
+    return "（事務局へ再通知されます）";
+  }
+
+  function destinationsFor(customerId) {
+    var seen = {}, list = [];
+    rateItems.forEach(function (r) {
+      if (r.customer_id === customerId && !seen[r.destination]) { seen[r.destination] = true; list.push(r.destination); }
+    });
+    return list;
+  }
+  function itemsFor(customerId, destination) {
+    return rateItems.filter(function (r) { return r.customer_id === customerId && r.destination === destination; });
+  }
+  function lookupRate(customerId, destination, itemName) {
+    var m = rateItems.find(function (r) { return r.customer_id === customerId && r.destination === destination && r.item_name === itemName; });
+    return m ? m.unit_price : null;
+  }
+
+  async function init() {
+    profile = await requireProfile("driver");
+    if (!profile) return;
+    document.getElementById("driver-name-display").textContent = profile.name + " さん";
+    document.getElementById("vehicle-input").value = profile.vehicle_no || "";
+    document.getElementById("date-input").value = todayKey();
+
+    var [{ data: customerRows }, { data: rateRows }] = await Promise.all([
+      supabaseClient.from("customers").select("*").order("name"),
+      supabaseClient.from("rate_items").select("*")
+    ]);
+    customers = customerRows || [];
+    rateItems = rateRows || [];
+
+    document.getElementById("date-input").addEventListener("change", loadDay);
+    document.getElementById("vehicle-input").addEventListener("change", saveVehicleNo);
+    document.getElementById("add-row-btn").addEventListener("click", addRow);
+    document.getElementById("logout-btn").addEventListener("click", signOut);
+    document.getElementById("rows-body").addEventListener("change", onFieldChange);
+    document.getElementById("rows-body").addEventListener("click", onRowClick);
+
+    await loadDay();
+  }
+
+  async function loadDay() {
+    document.getElementById("loading").style.display = "block";
+    document.getElementById("content").style.display = "none";
+
+    var dateKey = document.getElementById("date-input").value;
+
+    var { data: existing } = await supabaseClient
+      .from("report_days")
+      .select("*")
+      .eq("driver_id", profile.id)
+      .eq("report_date", dateKey)
+      .maybeSingle();
+
+    if (existing) {
+      reportDayId = existing.id;
+      document.getElementById("vehicle-input").value = existing.vehicle_no || profile.vehicle_no || "";
+    } else {
+      var { data: created, error } = await supabaseClient
+        .from("report_days")
+        .insert({ driver_id: profile.id, report_date: dateKey, vehicle_no: profile.vehicle_no || null })
+        .select()
+        .single();
+      if (error) { alert("日報の作成に失敗しました: " + error.message); return; }
+      reportDayId = created.id;
+    }
+
+    document.getElementById("driver-vehicle-display").textContent = todayLabel(dateKey);
+
+    subscribeRealtime();
+    await loadRows();
+
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("content").style.display = "block";
+  }
+
+  function subscribeRealtime() {
+    if (rowsChannel) supabaseClient.removeChannel(rowsChannel);
+    rowsChannel = supabaseClient
+      .channel("driver_rows_" + reportDayId)
+      .on("postgres_changes", { event: "*", schema: "public", table: "report_rows", filter: "report_day_id=eq." + reportDayId }, function () {
+        loadRows();
+      })
+      .subscribe();
+  }
+
+  async function saveVehicleNo() {
+    var v = document.getElementById("vehicle-input").value.trim();
+    await supabaseClient.from("report_days").update({ vehicle_no: v || null }).eq("id", reportDayId);
+  }
+
+  async function loadRows() {
+    var { data, error } = await supabaseClient
+      .from("report_rows")
+      .select("*")
+      .eq("report_day_id", reportDayId)
+      .order("seq", { ascending: true });
+    if (error) { console.error(error); return; }
+    rows = data || [];
+    render();
+  }
+
+  function render() {
+    var tbody = document.getElementById("rows-body");
+    var emptyEl = document.getElementById("empty-state");
+    if (rows.length === 0) {
+      tbody.innerHTML = "";
+      emptyEl.style.display = "block";
+      document.getElementById("total-label").textContent = "";
+      return;
+    }
+    emptyEl.style.display = "none";
+
+    var total = 0;
+    tbody.innerHTML = rows.map(function (row) {
+      total += Number(row.amount || 0);
+      var destOptions = destinationsFor(row.customer_id).map(function (d) { return '<option value="' + esc(d) + '">'; }).join("");
+      var itemOptions = itemsFor(row.customer_id, row.destination).map(function (r) { return '<option value="' + esc(r.item_name) + '">'; }).join("");
+      return (
+        '<tr data-id="' + row.id + '">' +
+          '<td><span class="badge badge-' + row.status + '">' + STATUS_LABEL[row.status] + "</span></td>" +
+          '<td><select data-field="customer_id"><option value="">(未選択)</option>' +
+            customers.map(function (c) { return '<option value="' + c.id + '"' + (c.id === row.customer_id ? " selected" : "") + ">" + esc(c.name) + "</option>"; }).join("") +
+          "</select></td>" +
+          '<td><input data-field="origin" value="' + esc(row.origin) + '" placeholder="例: 境港"></td>' +
+          '<td><input list="dest-' + row.id + '" data-field="destination" value="' + esc(row.destination) + '" placeholder="着地">' +
+            '<datalist id="dest-' + row.id + '">' + destOptions + "</datalist></td>" +
+          '<td><input list="item-' + row.id + '" data-field="item_name" value="' + esc(row.item_name) + '" placeholder="品名">' +
+            '<datalist id="item-' + row.id + '">' + itemOptions + "</datalist></td>" +
+          '<td><input type="number" step="any" data-field="quantity" value="' + (row.quantity == null ? "" : row.quantity) + '"></td>' +
+          '<td><input type="number" step="any" data-field="unit_price" value="' + (row.unit_price == null ? "" : row.unit_price) + '"></td>' +
+          '<td class="amount-cell">' + yen(row.amount) + "</td>" +
+          '<td><input data-field="note" value="' + esc(row.note) + '"></td>' +
+          '<td><div class="notify-cell">' +
+            '<button class="btn btn-primary btn-small" data-action="submit">更新して事務に通知</button>' +
+            '<span class="notify-hint">' + statusHint(row.status) + "</span>" +
+          "</div></td>" +
+        "</tr>"
+      );
+    }).join("");
+
+    document.getElementById("total-label").textContent = "本日合計: " + yen(total) + "（" + rows.length + "件）";
+  }
+
+  async function addRow() {
+    var nextSeq = rows.length;
+    var { error } = await supabaseClient.from("report_rows").insert({
+      report_day_id: reportDayId,
+      seq: nextSeq,
+      status: "running"
+    });
+    if (error) { alert("行の追加に失敗しました: " + error.message); return; }
+    await loadRows();
+  }
+
+  async function onFieldChange(e) {
+    var field = e.target.getAttribute("data-field");
+    if (!field) return;
+    var tr = e.target.closest("tr");
+    var id = tr.getAttribute("data-id");
+    var row = rows.find(function (r) { return r.id === id; });
+    if (!row) return;
+
+    var patch = {};
+    if (field === "customer_id") {
+      patch.customer_id = e.target.value || null;
+      row.customer_id = patch.customer_id;
+    } else if (field === "quantity" || field === "unit_price") {
+      var num = e.target.value === "" ? null : Number(e.target.value);
+      patch[field] = num;
+      row[field] = num;
+    } else {
+      patch[field] = e.target.value || null;
+      row[field] = patch[field];
+    }
+
+    if (field === "customer_id" || field === "destination" || field === "item_name") {
+      var matched = lookupRate(row.customer_id, row.destination, row.item_name);
+      if (matched != null) {
+        patch.unit_price = matched;
+        row.unit_price = matched;
+      }
+    }
+
+    var { error } = await supabaseClient.from("report_rows").update(patch).eq("id", id);
+    if (error) { alert("保存に失敗しました: " + error.message); }
+    await loadRows();
+  }
+
+  async function onRowClick(e) {
+    if (e.target.getAttribute("data-action") !== "submit") return;
+    var tr = e.target.closest("tr");
+    var id = tr.getAttribute("data-id");
+    var row = rows.find(function (r) { return r.id === id; });
+    if (!row) return;
+
+    var nextStatus = row.status === "running" ? "done" : "revising";
+    var { error } = await supabaseClient.from("report_rows").update({ status: nextStatus }).eq("id", id);
+    if (error) { alert("更新に失敗しました: " + error.message); return; }
+    await loadRows();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

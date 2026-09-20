@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>配送先リスト｜株式会社ながたに</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+  .chip-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+  .chip {
+    padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border); background: #fff;
+    font-size: 13px; display: flex; align-items: center; gap: 8px;
+  }
+  .chip button { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 12px; padding: 0; font-family: inherit; }
+  .inline-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  .inline-form input, .inline-form select { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 13px; }
+  .group-heading { font-size: 13px; font-weight: 700; color: #475569; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <h1>📋 配送先リスト</h1>
+  <nav>
+    <a class="btn btn-small" href="haisya.html">← 配車メモ入力に戻る</a>
+    <a class="btn btn-small" href="box_types.html">品名リスト</a>
+    <button class="btn btn-small" id="logout-btn">ログアウト</button>
+  </nav>
+</header>
+
+<div class="container">
+  <div class="card">
+    <div class="section-title" style="margin-top:0;">配送先一覧（配車メモの「着地」の選択肢になります）</div>
+    <div id="list"></div>
+    <div class="inline-form">
+      <input id="new-name" placeholder="新しい配送先名（例: 神港魚類）" style="min-width:220px;">
+      <input id="new-group" list="group-list" placeholder="運賃グループ（例: 200円）" style="width:150px;">
+      <datalist id="group-list"></datalist>
+      <button class="btn btn-primary btn-small" id="add-btn">＋ 追加</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/supabase.js"></script>
+<script>
+(function () {
+  "use strict";
+  var items = [];
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  async function init() {
+    var profile = await requireProfileIn(["haisya", "office"]);
+    if (!profile) return;
+    document.getElementById("logout-btn").addEventListener("click", signOut);
+    document.getElementById("add-btn").addEventListener("click", addItem);
+    document.getElementById("list").addEventListener("click", onDelete);
+    await load();
+  }
+
+  async function load() {
+    var { data, error } = await supabaseClient.from("destinations").select("*").order("name");
+    if (error) { alert("取得に失敗しました: " + error.message); return; }
+    items = data || [];
+    render();
+  }
+
+  function groupSortKey(g) {
+    if (!g) return 999999;
+    var n = parseInt(g.replace(/[^0-9]/g, ""), 10);
+    return isNaN(n) ? 999998 : n;
+  }
+
+  function render() {
+    var el = document.getElementById("list");
+    if (items.length === 0) {
+      el.innerHTML = '<div style="color:#94a3b8;font-size:13px;">配送先がまだ登録されていません</div>';
+      return;
+    }
+
+    var groups = {};
+    items.forEach(function (d) {
+      var g = d.rate_group || "未分類";
+      if (!groups[g]) groups[g] = [];
+      groups[g].push(d);
+    });
+    var groupNames = Object.keys(groups).sort(function (a, b) { return groupSortKey(a) - groupSortKey(b); });
+
+    el.innerHTML = groupNames.map(function (g) {
+      var chips = groups[g].map(function (d) {
+        return '<div class="chip">' + esc(d.name) + ' <button data-delete="' + d.id + '">✕</button></div>';
+      }).join("");
+      return '<div class="group-heading">' + esc(g) + 'グループ（' + groups[g].length + '件）</div>' +
+        '<div class="chip-list">' + chips + "</div>";
+    }).join("");
+
+    var groupListEl = document.getElementById("group-list");
+    groupListEl.innerHTML = groupNames.filter(function (g) { return g !== "未分類"; })
+      .map(function (g) { return '<option value="' + esc(g) + '">'; }).join("");
+  }
+
+  async function addItem() {
+    var nameInput = document.getElementById("new-name");
+    var groupInput = document.getElementById("new-group");
+    var name = nameInput.value.trim();
+    var group = groupInput.value.trim();
+    if (!name) return;
+    var { error } = await supabaseClient.from("destinations").insert({ name: name, rate_group: group || null });
+    if (error) { alert("追加に失敗しました: " + error.message); return; }
+    nameInput.value = "";
+    groupInput.value = "";
+    await load();
+  }
+
+  async function onDelete(e) {
+    var id = e.target.getAttribute("data-delete");
+    if (!id) return;
+    if (!confirm("この配送先を削除しますか？")) return;
+    var { error } = await supabaseClient.from("destinations").delete().eq("id", id);
+    if (error) { alert("削除に失敗しました: " + error.message); return; }
+    await load();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

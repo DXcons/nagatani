@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>単価マスタ管理｜株式会社ながたに</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+  .customer-list { display: flex; flex-wrap: wrap; gap: 8px; }
+  .customer-chip {
+    padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border); background: #fff;
+    cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 6px;
+  }
+  .customer-chip.selected { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .inline-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .inline-form input { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 13px; }
+  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 12px; padding: 0; font-family: inherit; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <h1>🏢 単価マスタ管理</h1>
+  <nav>
+    <a class="btn btn-small" href="office.html">← ダッシュボードに戻る</a>
+    <button class="btn btn-small" id="logout-btn">ログアウト</button>
+  </nav>
+</header>
+
+<div class="container">
+  <div class="section-title">荷主一覧</div>
+  <div class="card">
+    <div class="customer-list" id="customer-list"></div>
+    <div class="inline-form">
+      <input id="new-customer-name" placeholder="新しい荷主名（例: ホクスイ）" style="min-width:220px;">
+      <button class="btn btn-primary btn-small" id="add-customer-btn">＋ 荷主を追加</button>
+    </div>
+  </div>
+
+  <div id="rate-section" style="display:none;">
+    <div class="section-title" id="rate-section-title"></div>
+    <div class="card">
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>着地</th><th>品名（箱種）</th><th style="width:120px;">単価</th><th style="width:60px;"></th></tr></thead>
+          <tbody id="rate-body"></tbody>
+        </table>
+      </div>
+      <div class="inline-form">
+        <input id="new-dest" placeholder="着地（例: 神港魚類）">
+        <input id="new-item" placeholder="品名（例: 5k鮮魚）">
+        <input id="new-price" type="number" step="any" placeholder="単価" style="width:100px;">
+        <button class="btn btn-primary btn-small" id="add-rate-btn">＋ 単価を追加</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/supabase.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var customers = [];
+  var selectedCustomerId = null;
+  var rateItems = [];
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  async function init() {
+    var profile = await requireProfile("office");
+    if (!profile) return;
+    document.getElementById("logout-btn").addEventListener("click", signOut);
+    document.getElementById("add-customer-btn").addEventListener("click", addCustomer);
+    document.getElementById("add-rate-btn").addEventListener("click", addRate);
+    document.getElementById("rate-body").addEventListener("click", onRateBodyClick);
+    document.getElementById("rate-body").addEventListener("change", onRateBodyChange);
+    await loadCustomers();
+  }
+
+  async function loadCustomers() {
+    var { data, error } = await supabaseClient.from("customers").select("*").order("name");
+    if (error) { alert("荷主一覧の取得に失敗しました: " + error.message); return; }
+    customers = data || [];
+    renderCustomerList();
+  }
+
+  function renderCustomerList() {
+    var el = document.getElementById("customer-list");
+    if (customers.length === 0) {
+      el.innerHTML = '<div style="color:#94a3b8;font-size:13px;">荷主がまだ登録されていません</div>';
+      return;
+    }
+    el.innerHTML = customers.map(function (c) {
+      return (
+        '<div class="customer-chip' + (c.id === selectedCustomerId ? " selected" : "") + '" data-id="' + c.id + '">' +
+          "<span data-select=\"1\">" + esc(c.name) + "</span>" +
+          '<button class="del-link" data-delete-customer="' + c.id + '" style="' + (c.id === selectedCustomerId ? "color:#fecaca;" : "") + '">✕</button>' +
+        "</div>"
+      );
+    }).join("");
+
+    el.querySelectorAll(".customer-chip").forEach(function (chip) {
+      chip.addEventListener("click", function (e) {
+        if (e.target.hasAttribute("data-delete-customer")) return;
+        selectCustomer(chip.getAttribute("data-id"));
+      });
+    });
+    el.querySelectorAll("[data-delete-customer]").forEach(function (btn) {
+      btn.addEventListener("click", async function (e) {
+        e.stopPropagation();
+        var id = btn.getAttribute("data-delete-customer");
+        var c = customers.find(function (x) { return x.id === id; });
+        if (!confirm((c ? c.name : "この荷主") + " を削除しますか？（単価マスタも削除されます）")) return;
+        var { error } = await supabaseClient.from("customers").delete().eq("id", id);
+        if (error) { alert("削除できませんでした。既に配車日報で使われている荷主は削除できません。"); return; }
+        if (selectedCustomerId === id) { selectedCustomerId = null; document.getElementById("rate-section").style.display = "none"; }
+        await loadCustomers();
+      });
+    });
+  }
+
+  async function addCustomer() {
+    var input = document.getElementById("new-customer-name");
+    var name = input.value.trim();
+    if (!name) return;
+    var { error } = await supabaseClient.from("customers").insert({ name: name });
+    if (error) { alert("追加に失敗しました: " + error.message); return; }
+    input.value = "";
+    await loadCustomers();
+  }
+
+  async function selectCustomer(id) {
+    selectedCustomerId = id;
+    renderCustomerList();
+    var c = customers.find(function (x) { return x.id === id; });
+    document.getElementById("rate-section-title").textContent = esc(c ? c.name : "") + " の単価マスタ";
+    document.getElementById("rate-section").style.display = "block";
+    await loadRates();
+  }
+
+  async function loadRates() {
+    var { data, error } = await supabaseClient
+      .from("rate_items")
+      .select("*")
+      .eq("customer_id", selectedCustomerId)
+      .order("destination")
+      .order("item_name");
+    if (error) { alert("単価マスタの取得に失敗しました: " + error.message); return; }
+    rateItems = data || [];
+    renderRates();
+  }
+
+  function renderRates() {
+    var tbody = document.getElementById("rate-body");
+    if (rateItems.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:#94a3b8;">単価がまだ登録されていません</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rateItems.map(function (r) {
+      return (
+        '<tr data-id="' + r.id + '">' +
+          "<td>" + esc(r.destination) + "</td>" +
+          "<td>" + esc(r.item_name) + "</td>" +
+          '<td><input type="number" step="any" data-field="unit_price" value="' + r.unit_price + '"></td>' +
+          '<td><button class="del-link" data-action="delete">削除</button></td>' +
+        "</tr>"
+      );
+    }).join("");
+  }
+
+  async function addRate() {
+    var dest = document.getElementById("new-dest").value.trim();
+    var item = document.getElementById("new-item").value.trim();
+    var price = document.getElementById("new-price").value;
+    if (!dest || !item || price === "") { alert("着地・品名・単価をすべて入力してください。"); return; }
+    var { error } = await supabaseClient.from("rate_items").insert({
+      customer_id: selectedCustomerId, destination: dest, item_name: item, unit_price: Number(price)
+    });
+    if (error) { alert("追加に失敗しました（同じ着地・品名の組み合わせが既にある可能性があります）: " + error.message); return; }
+    document.getElementById("new-dest").value = "";
+    document.getElementById("new-item").value = "";
+    document.getElementById("new-price").value = "";
+    await loadRates();
+  }
+
+  async function onRateBodyChange(e) {
+    if (e.target.getAttribute("data-field") !== "unit_price") return;
+    var id = e.target.closest("tr").getAttribute("data-id");
+    var { error } = await supabaseClient.from("rate_items").update({ unit_price: Number(e.target.value) }).eq("id", id);
+    if (error) { alert("更新に失敗しました: " + error.message); }
+  }
+
+  async function onRateBodyClick(e) {
+    if (e.target.getAttribute("data-action") !== "delete") return;
+    var id = e.target.closest("tr").getAttribute("data-id");
+    if (!confirm("この単価を削除しますか？")) return;
+    var { error } = await supabaseClient.from("rate_items").delete().eq("id", id);
+    if (error) { alert("削除に失敗しました: " + error.message); return; }
+    await loadRates();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
