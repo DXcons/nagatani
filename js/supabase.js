@@ -30,7 +30,8 @@ async function getMyProfile() {
   return data;
 }
 
-const ROLE_PAGE = { driver: "driver.html", haisya: "haisya.html", office: "office.html" };
+// admin（管理者）は3つの画面すべてに入れる
+const ROLE_PAGE = { driver: "driver.html", haisya: "haisya.html", office: "office.html", admin: "office.html" };
 
 async function requireProfile(expectedRole) {
   const profile = await getMyProfile();
@@ -38,10 +39,11 @@ async function requireProfile(expectedRole) {
     window.location.href = "login.html";
     return null;
   }
-  if (expectedRole && profile.role !== expectedRole) {
+  if (expectedRole && profile.role !== expectedRole && profile.role !== "admin") {
     window.location.href = ROLE_PAGE[profile.role] || "driver.html";
     return null;
   }
+  addAdminSwitcher(profile);
   return profile;
 }
 
@@ -51,11 +53,31 @@ async function requireProfileIn(allowedRoles) {
     window.location.href = "login.html";
     return null;
   }
-  if (allowedRoles && allowedRoles.indexOf(profile.role) === -1) {
+  if (allowedRoles && allowedRoles.indexOf(profile.role) === -1 && profile.role !== "admin") {
     window.location.href = ROLE_PAGE[profile.role] || "driver.html";
     return null;
   }
+  addAdminSwitcher(profile);
   return profile;
+}
+
+// 管理者のときだけ、画面上部に「ドライバー／配車／事務」の切り替えボタンを出す
+function addAdminSwitcher(profile) {
+  if (!profile || profile.role !== "admin") return;
+  const nav = document.querySelector("header.topbar nav");
+  if (!nav || nav.querySelector("[data-admin-switcher]")) return;
+  const wrap = document.createElement("span");
+  wrap.setAttribute("data-admin-switcher", "1");
+  wrap.style.cssText = "display:inline-flex;gap:4px;padding-right:8px;margin-right:4px;border-right:1px solid #e2e8f0;";
+  [["driver.html", "🚚 ドライバー"], ["haisya.html", "📋 配車"], ["office.html", "🏢 事務"]].forEach(function (p) {
+    const a = document.createElement("a");
+    a.className = "btn btn-small";
+    a.href = p[0];
+    a.textContent = p[1];
+    if (location.pathname.endsWith("/" + p[0])) { a.style.background = "#2563eb"; a.style.color = "#fff"; }
+    wrap.appendChild(a);
+  });
+  nav.insertBefore(wrap, nav.firstChild);
 }
 
 async function signOut() {
