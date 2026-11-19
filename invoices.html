@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>請求書作成｜株式会社ながたに</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+  .form-grid { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .form-grid label { font-size: 12px; color: #475569; display: flex; flex-direction: column; gap: 4px; }
+  .form-grid input, .form-grid select, .form-grid textarea {
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 13px;
+  }
+  .summary-box { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-top: 14px; }
+  .summary-box div { background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .summary-box .k { font-size: 11px; color: #64748b; }
+  .summary-box .v { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .summary-box .grand { background: #eff6ff; border-color: #bfdbfe; }
+  .warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 12px; }
+  .warn ul { margin: 6px 0 0; padding-left: 20px; }
+  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 12px; padding: 0; font-family: inherit; }
+  .link-btn { color: #2563eb; background: none; border: none; cursor: pointer; font-size: 13px; padding: 0; font-family: inherit; text-decoration: underline; }
+  tr.no-price td { background: #fef2f2; }
+  tr.manual td:first-child { border-left: 3px solid #a78bfa; }
+  #lines-body input { padding: 5px 6px; }
+  details.card summary { cursor: pointer; font-weight: 700; font-size: 14px; }
+  .badge-draft { background: #f1f5f9; color: #475569; }
+  .badge-issued { background: var(--green-bg); color: var(--green-fg); }
+  .legend { font-size: 12px; color: #64748b; margin-top: 8px; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <h1>🧾 請求書作成</h1>
+  <nav>
+    <a class="btn btn-small" href="office.html">← ダッシュボードに戻る</a>
+    <button class="btn btn-small" id="logout-btn">ログアウト</button>
+  </nav>
+</header>
+
+<div class="container">
+
+  <div class="section-title">新しい請求書を作る</div>
+  <div class="card">
+    <div class="form-grid">
+      <label>荷主<select id="new-customer"></select></label>
+      <label>対象期間（から）<input type="date" id="new-from"></label>
+      <label>対象期間（まで）<input type="date" id="new-to"></label>
+      <label>発行日<input type="date" id="new-issue"></label>
+      <button class="btn btn-primary" id="create-btn">配車日報から作成</button>
+    </div>
+    <div class="legend">対象期間内に「完了」になっている配車日報の明細を、日付・着地・品名・単価ごとにまとめて請求書の明細にします。</div>
+  </div>
+
+  <div class="section-title">作成済みの請求書</div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th>荷主</th><th>対象期間</th><th>発行日</th><th style="text-align:right;">今回御請求金額</th><th>状態</th><th style="width:140px;"></th>
+      </tr></thead>
+      <tbody id="invoice-list"></tbody>
+    </table>
+  </div>
+
+  <div id="editor" style="display:none;">
+    <div class="section-title" id="editor-title"></div>
+    <div class="card">
+      <div class="form-grid">
+        <label>宛名（請求書に印字される名称）<input id="ed-invoice-name" style="min-width:220px;"></label>
+        <label>発行日<input type="date" id="ed-issue"></label>
+        <label>前回御請求金額<input type="number" step="1" id="ed-prev" style="width:140px;"></label>
+        <label>御入金額<input type="number" step="1" id="ed-paid" style="width:140px;"></label>
+      </div>
+      <div class="summary-box" id="summary-box"></div>
+      <div id="warn-box"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;">
+        <button class="btn btn-primary" id="print-btn">🖨 印刷・PDF保存</button>
+        <button class="btn" id="reimport-btn">🔄 配車日報から取り込み直す</button>
+        <button class="btn" id="status-btn"></button>
+      </div>
+    </div>
+
+    <div class="section-title">明細</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th style="width:130px;">月日</th><th style="width:90px;">発地</th><th style="min-width:120px;">着地</th>
+          <th style="min-width:110px;">品名</th><th style="width:80px;">数量</th><th style="width:64px;">単位</th>
+          <th style="width:100px;">単価</th><th style="width:110px;text-align:right;">金額</th>
+          <th style="min-width:100px;">備考</th><th style="width:44px;"></th>
+        </tr></thead>
+        <tbody id="lines-body"></tbody>
+      </table>
+    </div>
+    <div class="add-row-wrap">
+      <button class="btn btn-small" id="add-line-btn">＋ 明細を手入力で追加</button>
+      <span class="legend">赤い行＝単価が未設定です。紫の線＝手入力した明細（取り込み直しても消えません）。</span>
+    </div>
+  </div>
+
+  <div class="section-title">自社情報（請求書に印字されます）</div>
+  <details class="card" id="company-card">
+    <summary>住所・振込先・登録番号などを編集する</summary>
+    <div class="form-grid" style="margin-top:12px;">
+      <label>会社名<input id="co-name" style="min-width:200px;"></label>
+      <label>郵便番号<input id="co-postal" style="width:110px;"></label>
+      <label>住所<input id="co-address" style="min-width:280px;"></label>
+      <label>TEL<input id="co-tel" style="width:140px;"></label>
+      <label>FAX<input id="co-fax" style="width:140px;"></label>
+      <label>登録番号（インボイス）<input id="co-reg" style="width:170px;"></label>
+      <label>消費税率（%）<input type="number" id="co-tax" style="width:80px;"></label>
+      <label style="flex-basis:100%;">振込先（改行できます）<textarea id="co-bank" rows="2" style="max-width:420px;"></textarea></label>
+      <button class="btn btn-primary btn-small" id="co-save-btn">保存</button>
+    </div>
+  </details>
+</div>
+
+<datalist id="unit-options"><option value="個"><option value="台"><option value="車"><option value="ケース"><option value="式"></datalist>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/supabase.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var profile = null;
+  var customers = [];
+  var invoices = [];
+  var company = null;
+  var current = null;   // 編集中の請求書
+  var lines = [];
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function num(n) { return Number(n || 0).toLocaleString("ja-JP"); }
+  function ymd(d) {
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  }
+  function customerById(id) { return customers.find(function (c) { return c.id === id; }); }
+  function lineAmount(l) { return Number(l.quantity || 0) * Number(l.unit_price || 0); }
+  function isLocked() { return current && current.status === "issued"; }
+
+  async function init() {
+    profile = await requireProfile("office");
+    if (!profile) return;
+
+    document.getElementById("logout-btn").addEventListener("click", signOut);
+    document.getElementById("create-btn").addEventListener("click", createInvoice);
+    document.getElementById("invoice-list").addEventListener("click", onListClick);
+    document.getElementById("lines-body").addEventListener("change", onLineChange);
+    document.getElementById("lines-body").addEventListener("click", onLineClick);
+    document.getElementById("add-line-btn").addEventListener("click", addLine);
+    document.getElementById("reimport-btn").addEventListener("click", function () { reimport(true); });
+    document.getElementById("status-btn").addEventListener("click", toggleStatus);
+    document.getElementById("print-btn").addEventListener("click", function () {
+      window.open("invoice_print.html?id=" + encodeURIComponent(current.id), "_blank");
+    });
+    ["ed-issue", "ed-prev", "ed-paid"].forEach(function (id) {
+      document.getElementById(id).addEventListener("change", onHeaderChange);
+    });
+    document.getElementById("ed-invoice-name").addEventListener("change", onInvoiceNameChange);
+    document.getElementById("co-save-btn").addEventListener("click", saveCompany);
+
+    // 既定の期間：10日までは先月分、それ以降は今月分
+    var now = new Date();
+    var base = now.getDate() <= 10 ? new Date(now.getFullYear(), now.getMonth() - 1, 1) : new Date(now.getFullYear(), now.getMonth(), 1);
+    var end = new Date(base.getFullYear(), base.getMonth() + 1, 0);
+    document.getElementById("new-from").value = ymd(base);
+    document.getElementById("new-to").value = ymd(end);
+    document.getElementById("new-issue").value = ymd(end);
+    document.getElementById("new-to").addEventListener("change", function () {
+      document.getElementById("new-issue").value = this.value;
+    });
+
+    var [{ data: cs, error: e1 }, { data: co, error: e2 }] = await Promise.all([
+      supabaseClient.from("customers").select("*").order("name"),
+      supabaseClient.from("company_settings").select("*").eq("id", 1).maybeSingle()
+    ]);
+    if (e1 || e2) { alert("読み込みに失敗しました: " + (e1 || e2).message + "\n（請求書用のSQLが未適用の可能性があります）"); return; }
+    customers = cs || [];
+    company = co || { tax_rate: 10 };
+    document.getElementById("new-customer").innerHTML = customers.map(function (c) {
+      return '<option value="' + c.id + '">' + esc(c.name) + "</option>";
+    }).join("");
+    renderCompany();
+    await loadInvoices();
+  }
+
+  // ---------------- 一覧 ----------------
+  async function loadInvoices() {
+    var { data, error } = await supabaseClient.from("invoices").select("*").order("period_end", { ascending: false }).order("created_at", { ascending: false });
+    if (error) { alert("請求書一覧の取得に失敗しました: " + error.message); return; }
+    invoices = data || [];
+    var el = document.getElementById("invoice-list");
+    if (invoices.length === 0) {
+      el.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#94a3b8;">まだ請求書はありません</td></tr>';
+      return;
+    }
+    el.innerHTML = invoices.map(function (inv) {
+      var c = customerById(inv.customer_id);
+      return (
+        '<tr data-id="' + inv.id + '"' + (current && current.id === inv.id ? ' style="background:#eff6ff;"' : "") + ">" +
+          "<td>" + esc(c ? c.name : "-") + "</td>" +
+          "<td>" + inv.period_start + " 〜 " + inv.period_end + "</td>" +
+          "<td>" + inv.issue_date + "</td>" +
+          '<td class="amount-cell">' + yen(inv.grand_total) + "</td>" +
+          '<td><span class="badge badge-' + inv.status + '">' + (inv.status === "issued" ? "発行済み" : "下書き") + "</span></td>" +
+          '<td><button class="btn btn-small" data-open="1">開く</button> ' +
+            (inv.status === "draft" ? '<button class="del-link" data-delete="1">削除</button>' : "") + "</td>" +
+        "</tr>"
+      );
+    }).join("");
+  }
+
+  async function onListClick(e) {
+    var tr = e.target.closest("tr");
+    if (!tr) return;
+    var id = tr.getAttribute("data-id");
+    if (e.target.hasAttribute("data-open")) { await openInvoice(id); return; }
+    if (e.target.hasAttribute("data-delete")) {
+      if (!confirm("この請求書（下書き）を削除しますか？")) return;
+      var { error } = await supabaseClient.from("invoices").delete().eq("id", id);
+      if (error) { alert("削除に失敗しました: " + error.message); return; }
+      if (current && current.id === id) { current = null; document.getElementById("editor").style.display = "none"; }
+      await loadInvoices();
+    }
+  }
+
+  // ---------------- 作成 ----------------
+  async function createInvoice() {
+    var customerId = document.getElementById("new-customer").value;
+    var from = document.getElementById("new-from").value;
+    var to = document.getElementById("new-to").value;
+    var issue = document.getElementById("new-issue").value || to;
+    if (!customerId || !from || !to) { alert("荷主と対象期間を入力してください。"); return; }
+    if (from > to) { alert("対象期間の「から」と「まで」が逆になっています。"); return; }
+
+    var existing = invoices.find(function (i) { return i.customer_id === customerId && i.period_start === from && i.period_end === to; });
+    if (existing) { alert("同じ荷主・期間の請求書が既にあります。そちらを開きます。"); await openInvoice(existing.id); return; }
+
+    // 前回の請求書の「今回御請求金額」を、今回の「前回御請求金額」に引き継ぐ
+    var { data: prev } = await supabaseClient.from("invoices").select("grand_total")
+      .eq("customer_id", customerId).lt("period_end", from)
+      .order("period_end", { ascending: false }).limit(1).maybeSingle();
+
+    var { data: inv, error } = await supabaseClient.from("invoices").insert({
+      customer_id: customerId, period_start: from, period_end: to, issue_date: issue,
+      prev_billed: prev ? prev.grand_total : 0, paid: 0,
+      tax_rate: company.tax_rate == null ? 10 : company.tax_rate,
+      created_by: profile.id
+    }).select().single();
+    if (error) { alert("請求書の作成に失敗しました: " + error.message); return; }
+
+    current = inv;
+    await reimport(false);
+    await loadInvoices();
+    await openInvoice(inv.id);
+  }
+
+  // 配車日報（完了分）を集計して、取り込み明細を作り直す。手入力の明細は残す
+  async function reimport(ask) {
+    if (!current) return;
+    if (isLocked()) { alert("発行済みの請求書は変更できません。先に「下書きに戻す」を押してください。"); return; }
+    if (ask && !confirm("配車日報から取り込んだ明細を作り直します。\n（取り込み明細に加えた修正は元に戻ります。手入力した明細は残ります）")) return;
+
+    var { data: rows, error } = await supabaseClient
+      .from("report_rows")
+      .select("id, seq, origin, destination, item_name, quantity, unit_price, status, created_at, report_days!inner(report_date, vehicle_no)")
+      .eq("customer_id", current.customer_id)
+      .gte("report_days.report_date", current.period_start)
+      .lte("report_days.report_date", current.period_end);
+    if (error) { alert("配車日報の取得に失敗しました: " + error.message); return; }
+
+    var done = (rows || []).filter(function (r) { return r.status === "done"; });
+    done.sort(function (a, b) {
+      var da = a.report_days.report_date, db = b.report_days.report_date;
+      if (da !== db) return da < db ? -1 : 1;
+      var va = a.report_days.vehicle_no || "", vb = b.report_days.vehicle_no || "";
+      if (va !== vb) return va < vb ? -1 : 1;
+      return (a.seq || 0) - (b.seq || 0);
+    });
+
+    // 日付・発地・着地・品名・単価が同じものは数量を合算
+    var groups = [];
+    var index = {};
+    done.forEach(function (r) {
+      var key = [r.report_days.report_date, r.origin || "", r.destination || "", r.item_name || "", r.unit_price == null ? "" : r.unit_price].join("|");
+      if (index[key] === undefined) {
+        index[key] = groups.length;
+        groups.push({
+          line_date: r.report_days.report_date, origin: r.origin, destination: r.destination,
+          item_name: r.item_name, quantity: 0, unit_price: r.unit_price
+        });
+      }
+      groups[index[key]].quantity += Number(r.quantity || 0);
+    });
+
+    var { error: delErr } = await supabaseClient.from("invoice_lines").delete().eq("invoice_id", current.id).eq("source", "report");
+    if (delErr) { alert("既存明細の削除に失敗しました: " + delErr.message); return; }
+
+    if (groups.length > 0) {
+      var payload = groups.map(function (g, i) {
+        return {
+          invoice_id: current.id, seq: i, line_date: g.line_date, origin: g.origin, destination: g.destination,
+          item_name: g.item_name, quantity: g.quantity, unit: "個", unit_price: g.unit_price, source: "report"
+        };
+      });
+      var { error: insErr } = await supabaseClient.from("invoice_lines").insert(payload);
+      if (insErr) { alert("明細の作成に失敗しました: " + insErr.message); return; }
+    }
+    if (ask) await openInvoice(current.id);
+  }
+
+  // ---------------- 編集 ----------------
+  async function openInvoice(id) {
+    var [{ data: inv, error: e1 }, { data: ls, error: e2 }] = await Promise.all([
+      supabaseClient.from("invoices").select("*").eq("id", id).single(),
+      supabaseClient.from("invoice_lines").select("*").eq("invoice_id", id)
+    ]);
+    if (e1 || e2) { alert("請求書の取得に失敗しました: " + (e1 || e2).message); return; }
+    current = inv;
+    lines = sortLines(ls || []);
+
+    var c = customerById(inv.customer_id);
+    document.getElementById("editor-title").textContent =
+      (c ? c.name : "") + " 様　" + inv.period_start + " 〜 " + inv.period_end + " 分";
+    document.getElementById("ed-invoice-name").value = c ? (c.invoice_name || c.name) : "";
+    document.getElementById("ed-issue").value = inv.issue_date;
+    document.getElementById("ed-prev").value = inv.prev_billed;
+    document.getElementById("ed-paid").value = inv.paid;
+    document.getElementById("editor").style.display = "block";
+
+    renderLines();
+    await recalc(false);
+    await renderWarnings();
+    applyLock();
+    await loadInvoices();
+    document.getElementById("editor").scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  function sortLines(arr) {
+    return arr.slice().sort(function (a, b) {
+      var da = a.line_date || "9999-99-99", db = b.line_date || "9999-99-99";
+      if (da !== db) return da < db ? -1 : 1;
+      return (a.seq || 0) - (b.seq || 0);
+    });
+  }
+
+  function renderLines() {
+    var tbody = document.getElementById("lines-body");
+    if (lines.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#94a3b8;">明細がありません（対象期間に完了済みの配車日報がありません）</td></tr>';
+      return;
+    }
+    tbody.innerHTML = lines.map(function (l) {
+      var cls = [];
+      if (l.unit_price == null || l.unit_price === "") cls.push("no-price");
+      if (l.source === "manual") cls.push("manual");
+      return (
+        '<tr data-id="' + l.id + '" class="' + cls.join(" ") + '">' +
+          '<td><input type="date" data-field="line_date" value="' + esc(l.line_date || "") + '"></td>' +
+          '<td><input data-field="origin" value="' + esc(l.origin) + '"></td>' +
+          '<td><input data-field="destination" value="' + esc(l.destination) + '"></td>' +
+          '<td><input data-field="item_name" value="' + esc(l.item_name) + '"></td>' +
+          '<td><input type="number" step="any" data-field="quantity" value="' + esc(l.quantity) + '"></td>' +
+          '<td><input data-field="unit" list="unit-options" value="' + esc(l.unit) + '"></td>' +
+          '<td><input type="number" step="any" data-field="unit_price" value="' + esc(l.unit_price) + '"></td>' +
+          '<td class="amount-cell" data-amount="1">' + num(lineAmount(l)) + "</td>" +
+          '<td><input data-field="note" value="' + esc(l.note) + '"></td>' +
+          '<td><button class="del-link" data-action="delete">削除</button></td>' +
+        "</tr>"
+      );
+    }).join("");
+  }
+
+  async function onLineChange(e) {
+    var field = e.target.getAttribute("data-field");
+    if (!field) return;
+    var tr = e.target.closest("tr");
+    var id = tr.getAttribute("data-id");
+    var line = lines.find(function (l) { return l.id === id; });
+    var v = e.target.value;
+    var value;
+    if (field === "quantity" || field === "unit_price") value = v === "" ? null : Number(v);
+    else if (field === "line_date") value = v || null;
+    else value = v.trim() === "" ? (field === "unit" ? "個" : null) : v.trim();
+
+    var { error } = await supabaseClient.from("invoice_lines").update({ [field]: value }).eq("id", id);
+    if (error) { alert("保存に失敗しました: " + error.message); return; }
+    line[field] = value;
+    tr.querySelector("[data-amount]").textContent = num(lineAmount(line));
+    tr.classList.toggle("no-price", line.unit_price == null);
+    await recalc(true);
+  }
+
+  async function onLineClick(e) {
+    if (e.target.getAttribute("data-action") !== "delete") return;
+    var id = e.target.closest("tr").getAttribute("data-id");
+    if (!confirm("この明細を削除しますか？")) return;
+    var { error } = await supabaseClient.from("invoice_lines").delete().eq("id", id);
+    if (error) { alert("削除に失敗しました: " + error.message); return; }
+    lines = lines.filter(function (l) { return l.id !== id; });
+    renderLines();
+    applyLock();
+    await recalc(true);
+  }
+
+  async function addLine() {
+    var lastDate = lines.length ? lines[lines.length - 1].line_date : current.period_start;
+    var maxSeq = lines.reduce(function (m, l) { return Math.max(m, l.seq || 0); }, 0);
+    var { data, error } = await supabaseClient.from("invoice_lines").insert({
+      invoice_id: current.id, seq: Math.max(maxSeq + 1, 10000), line_date: lastDate, unit: "個", source: "manual"
+    }).select().single();
+    if (error) { alert("追加に失敗しました: " + error.message); return; }
+    lines.push(data);
+    renderLines();
+    applyLock();
+    var rowsEl = document.querySelectorAll("#lines-body tr");
+    var last = rowsEl[rowsEl.length - 1];
+    if (last) { var inp = last.querySelector('[data-field="item_name"]'); if (inp) inp.focus(); }
+  }
+
+  async function onHeaderChange() {
+    var patch = {
+      issue_date: document.getElementById("ed-issue").value || current.issue_date,
+      prev_billed: Number(document.getElementById("ed-prev").value || 0),
+      paid: Number(document.getElementById("ed-paid").value || 0)
+    };
+    var { error } = await supabaseClient.from("invoices").update(patch).eq("id", current.id);
+    if (error) { alert("保存に失敗しました: " + error.message); return; }
+    Object.assign(current, patch);
+    await recalc(true);
+  }
+
+  async function onInvoiceNameChange(e) {
+    var v = e.target.value.trim();
+    var { error } = await supabaseClient.from("customers").update({ invoice_name: v || null }).eq("id", current.customer_id);
+    if (error) { alert("宛名の保存に失敗しました: " + error.message); return; }
+    var c = customerById(current.customer_id);
+    if (c) c.invoice_name = v || null;
+  }
+
+  // 合計の再計算（消費税は1円未満切り捨て）
+  async function recalc(save) {
+    var subtotal = lines.reduce(function (s, l) { return s + lineAmount(l); }, 0);
+    var tax = Math.floor(subtotal * Number(current.tax_rate) / 100);
+    var currentTotal = subtotal + tax;
+    var prevBalance = Number(current.prev_billed || 0) - Number(current.paid || 0);
+    var grand = prevBalance + currentTotal;
+
+    document.getElementById("summary-box").innerHTML =
+      '<div><div class="k">前回御請求金額</div><div class="v">' + num(current.prev_billed) + "</div></div>" +
+      '<div><div class="k">御入金額</div><div class="v">' + num(current.paid) + "</div></div>" +
+      '<div><div class="k">前回分残額</div><div class="v">' + num(prevBalance) + "</div></div>" +
+      '<div><div class="k">合計金額（税抜）</div><div class="v">' + num(subtotal) + "</div></div>" +
+      '<div><div class="k">消費税（' + num(current.tax_rate) + "%）</div><div class=\"v\">" + num(tax) + "</div></div>" +
+      '<div><div class="k">当月分請求金額</div><div class="v">' + num(currentTotal) + "</div></div>" +
+      '<div class="grand"><div class="k">今回御請求金額</div><div class="v">¥' + num(grand) + "</div></div>";
+
+    if (save && (Number(current.subtotal) !== subtotal || Number(current.tax) !== tax || Number(current.grand_total) !== grand)) {
+      var { error } = await supabaseClient.from("invoices").update({ subtotal: subtotal, tax: tax, grand_total: grand }).eq("id", current.id);
+      if (error) { alert("合計の保存に失敗しました: " + error.message); return; }
+      current.subtotal = subtotal; current.tax = tax; current.grand_total = grand;
+      await loadInvoices();
+    } else if (!save && (Number(current.subtotal) !== subtotal || Number(current.tax) !== tax || Number(current.grand_total) !== grand)) {
+      // 作成直後など、保存値と計算値がずれていれば保存する
+      await recalc(true);
+    }
+  }
+
+  // 未完了の配車日報・単価未設定の明細を警告
+  async function renderWarnings() {
+    var box = document.getElementById("warn-box");
+    var msgs = [];
+    var { data: pending } = await supabaseClient
+      .from("report_rows")
+      .select("status, destination, item_name, report_days!inner(report_date, profiles(name))")
+      .eq("customer_id", current.customer_id)
+      .neq("status", "done")
+      .gte("report_days.report_date", current.period_start)
+      .lte("report_days.report_date", current.period_end);
+    if (pending && pending.length) {
+      msgs.push("完了になっていない配車日報が " + pending.length + " 件あります（請求書には含まれていません）：<ul>" +
+        pending.slice(0, 10).map(function (p) {
+          var who = p.report_days.profiles ? p.report_days.profiles.name : "";
+          return "<li>" + esc(p.report_days.report_date) + "　" + esc(who) + "　" + esc(p.destination || "-") + "　" + esc(p.item_name || "-") +
+            "（" + (p.status === "revising" ? "修正中" : "運行中") + "）</li>";
+        }).join("") + (pending.length > 10 ? "<li>ほか " + (pending.length - 10) + " 件</li>" : "") + "</ul>");
+    }
+    var noPrice = lines.filter(function (l) { return l.unit_price == null; }).length;
+    if (noPrice) msgs.push("単価が未設定の明細が " + noPrice + " 件あります（赤い行）。");
+    box.innerHTML = msgs.map(function (m) { return '<div class="warn">⚠ ' + m + "</div>"; }).join("");
+  }
+
+  async function toggleStatus() {
+    var next = current.status === "issued" ? "draft" : "issued";
+    if (next === "issued" && !confirm("発行済みにすると、この請求書は編集できなくなります（下書きに戻すことはできます）。よろしいですか？")) return;
+    var { error } = await supabaseClient.from("invoices").update({ status: next }).eq("id", current.id);
+    if (error) { alert("更新に失敗しました: " + error.message); return; }
+    current.status = next;
+    applyLock();
+    await loadInvoices();
+  }
+
+  function applyLock() {
+    var locked = isLocked();
+    document.querySelectorAll("#editor input, #lines-body button, #add-line-btn, #reimport-btn").forEach(function (el) {
+      el.disabled = locked;
+    });
+    var btn = document.getElementById("status-btn");
+    btn.textContent = locked ? "↩ 下書きに戻す" : "✅ 発行済みにする";
+  }
+
+  // ---------------- 自社情報 ----------------
+  function renderCompany() {
+    document.getElementById("co-name").value = company.company_name || "";
+    document.getElementById("co-postal").value = company.postal_code || "";
+    document.getElementById("co-address").value = company.address || "";
+    document.getElementById("co-tel").value = company.tel || "";
+    document.getElementById("co-fax").value = company.fax || "";
+    document.getElementById("co-reg").value = company.registration_no || "";
+    document.getElementById("co-tax").value = company.tax_rate == null ? 10 : company.tax_rate;
+    document.getElementById("co-bank").value = company.bank_info || "";
+  }
+
+  async function saveCompany() {
+    var patch = {
+      company_name: document.getElementById("co-name").value.trim(),
+      postal_code: document.getElementById("co-postal").value.trim(),
+      address: document.getElementById("co-address").value.trim(),
+      tel: document.getElementById("co-tel").value.trim(),
+      fax: document.getElementById("co-fax").value.trim(),
+      registration_no: document.getElementById("co-reg").value.trim(),
+      tax_rate: Number(document.getElementById("co-tax").value || 10),
+      bank_info: document.getElementById("co-bank").value
+    };
+    var { error } = await supabaseClient.from("company_settings").update(patch).eq("id", 1);
+    if (error) { alert("保存に失敗しました: " + error.message); return; }
+    Object.assign(company, patch);
+    alert("自社情報を保存しました。（消費税率の変更は、これから作る請求書に反映されます）");
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

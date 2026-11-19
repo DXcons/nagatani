@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>請求書｜株式会社ながたに</title>
+<style>
+  @page { size: A4 landscape; margin: 0; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: #e5e7eb; color: #000;
+    font-family: "Yu Gothic", "YuGothic", "Hiragino Sans", "Meiryo", sans-serif;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .bar {
+    position: sticky; top: 0; background: #fff; border-bottom: 1px solid #d1d5db; padding: 10px 16px;
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; z-index: 10;
+  }
+  .bar button { padding: 8px 16px; border-radius: 8px; border: 1px solid #2563eb; background: #2563eb; color: #fff; cursor: pointer; font-family: inherit; font-size: 14px; }
+  .bar .hint { color: #6b7280; }
+
+  .page {
+    width: 297mm; height: 210mm; padding: 9mm 12mm 8mm; margin: 12px auto; background: #fff;
+    box-shadow: 0 2px 8px rgba(0,0,0,.15); position: relative; overflow: hidden;
+    page-break-after: always; break-after: page;
+  }
+  .page:last-child { page-break-after: auto; break-after: auto; }
+
+  /* ---- 1ページ目のヘッダー ---- */
+  .title { text-align: center; font-size: 22pt; letter-spacing: .6em; font-weight: 600; margin: 2mm 0 0; padding-left: .6em; }
+  .head { display: flex; justify-content: space-between; align-items: flex-start; margin-top: 2mm; }
+  .to { width: 120mm; margin-top: 10mm; }
+  .to .name { font-size: 15pt; border-bottom: 1px solid #000; padding: 0 0 1mm 8mm; }
+  .to .greet { font-size: 9pt; margin-top: 1.5mm; line-height: 1.5; }
+  .from { display: flex; gap: 6mm; align-items: flex-start; }
+  .from .stamp { width: 16mm; height: 16mm; margin-top: 12mm; object-fit: contain; }
+  .from .issue { font-size: 10pt; margin-right: 8mm; margin-top: -1mm; white-space: nowrap; }
+  .from .co { font-size: 9.5pt; line-height: 1.45; width: 92mm; }
+  .from .co .cname { font-size: 13pt; font-weight: 700; letter-spacing: .15em; text-align: center; margin: .5mm 0; }
+  .from .co .row2 { display: flex; justify-content: space-between; }
+  .from .co .bank { white-space: pre-line; }
+
+  table.summary { border-collapse: collapse; margin: 3mm 0 3mm 22mm; font-size: 10pt; }
+  table.summary th, table.summary td { border: 1px solid #000; width: 37mm; text-align: center; padding: .6mm 2mm; font-weight: normal; }
+  table.summary td.strong { font-weight: 700; }
+
+  /* ---- 明細 ---- */
+  table.lines { width: 100%; border-collapse: collapse; font-size: 9.5pt; table-layout: fixed; }
+  table.lines th, table.lines td { border: 1px solid #000; height: 4.75mm; padding: 0 1.5mm; white-space: nowrap; overflow: hidden; line-height: 1; }
+  table.lines th { font-weight: normal; font-size: 11pt; letter-spacing: .4em; text-align: center; }
+  table.lines td.r { text-align: right; font-variant-numeric: tabular-nums; }
+  table.lines td.c { text-align: center; }
+  table.lines tr.totals td { font-size: 9.5pt; }
+  table.lines tr.foot td:first-child { letter-spacing: 1.2em; font-size: 11pt; }
+
+  .page-head { display: flex; justify-content: space-between; align-items: flex-end; margin: 3mm 0 1mm; }
+  .page-head .name { font-size: 14pt; padding-left: 8mm; }
+  .page-head .right { display: flex; gap: 20mm; align-items: flex-end; font-size: 9pt; }
+  .page-head .co { font-size: 12pt; font-weight: 700; letter-spacing: .1em; }
+
+  .msg { text-align: center; padding: 60px; color: #6b7280; }
+
+  @media print {
+    body { background: #fff; }
+    .bar { display: none; }
+    .page { margin: 0; box-shadow: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <button onclick="window.print()">🖨 印刷する／PDFで保存</button>
+  <span class="hint">印刷画面で「送信先：PDFに保存」を選ぶとPDFになります。用紙は A4 横、余白「なし」、「背景のグラフィック」オンを推奨。</span>
+</div>
+<div id="pages"><div class="msg">読み込み中...</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/supabase.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var FIRST_PAGE_ROWS = 21;   // 1ページ目の明細行数
+  var OTHER_PAGE_ROWS = 33;   // 2ページ目以降の明細行数
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function num(n) { return Number(n || 0).toLocaleString("ja-JP"); }
+  function numOrBlank(n) { return n === null || n === undefined || n === "" ? "" : Number(n).toLocaleString("ja-JP"); }
+  function warekiDate(s) {
+    var d = new Date(s + "T00:00:00");
+    try {
+      return new Intl.DateTimeFormat("ja-JP-u-ca-japanese", { era: "long", year: "numeric", month: "long", day: "numeric" }).format(d);
+    } catch (e) {
+      return d.getFullYear() + "年" + (d.getMonth() + 1) + "月" + d.getDate() + "日";
+    }
+  }
+  function md(s) {
+    if (!s) return "";
+    var p = s.split("-");
+    return Number(p[1]) + "月" + Number(p[2]) + "日";
+  }
+
+  async function init() {
+    var profile = await requireProfile("office");
+    if (!profile) return;
+    var id = new URLSearchParams(location.search).get("id");
+    if (!id) { document.getElementById("pages").innerHTML = '<div class="msg">請求書が指定されていません。</div>'; return; }
+
+    var [{ data: inv, error: e1 }, { data: lines, error: e2 }, { data: co, error: e3 }] = await Promise.all([
+      supabaseClient.from("invoices").select("*, customers(name, invoice_name)").eq("id", id).single(),
+      supabaseClient.from("invoice_lines").select("*").eq("invoice_id", id),
+      supabaseClient.from("company_settings").select("*").eq("id", 1).maybeSingle()
+    ]);
+    var err = e1 || e2 || e3;
+    if (err) { document.getElementById("pages").innerHTML = '<div class="msg">読み込みに失敗しました: ' + esc(err.message) + "</div>"; return; }
+
+    lines = (lines || []).sort(function (a, b) {
+      var da = a.line_date || "9999-99-99", db = b.line_date || "9999-99-99";
+      if (da !== db) return da < db ? -1 : 1;
+      return (a.seq || 0) - (b.seq || 0);
+    });
+    render(inv, lines, co || {});
+  }
+
+  function render(inv, lines, co) {
+    var customerName = inv.customers ? (inv.customers.invoice_name || inv.customers.name) : "";
+    document.title = "請求書_" + customerName + "_" + inv.period_end;
+
+    var subtotal = lines.reduce(function (s, l) { return s + Number(l.quantity || 0) * Number(l.unit_price || 0); }, 0);
+    var tax = Math.floor(subtotal * Number(inv.tax_rate) / 100);
+    var currentTotal = subtotal + tax;
+    var prevBalance = Number(inv.prev_billed || 0) - Number(inv.paid || 0);
+    var grand = prevBalance + currentTotal;
+
+    // ページ分割
+    var pages = [];
+    pages.push(lines.slice(0, FIRST_PAGE_ROWS));
+    for (var i = FIRST_PAGE_ROWS; i < lines.length; i += OTHER_PAGE_ROWS) pages.push(lines.slice(i, i + OTHER_PAGE_ROWS));
+
+    var colgroup =
+      '<colgroup><col style="width:24mm"><col style="width:20mm"><col style="width:33mm"><col style="width:35mm">' +
+      '<col style="width:17mm"><col style="width:15mm"><col style="width:30mm"><col style="width:43mm"><col></colgroup>';
+    var headRow = "<tr><th>月日</th><th>発地</th><th>着地</th><th>品名</th><th>数量</th><th>単位</th><th>単価</th><th>金額</th><th>備考</th></tr>";
+
+    var html = pages.map(function (pageLines, pi) {
+      var pageTotal = pageLines.reduce(function (s, l) { return s + Number(l.quantity || 0) * Number(l.unit_price || 0); }, 0);
+      var prevDate = null;
+      var body = pageLines.map(function (l, li) {
+        var showDate = li === 0 || l.line_date !== prevDate;
+        prevDate = l.line_date;
+        var amount = Number(l.quantity || 0) * Number(l.unit_price || 0);
+        return (
+          "<tr>" +
+            '<td class="r">' + (showDate ? md(l.line_date) : "") + "</td>" +
+            '<td class="c">' + esc(l.origin) + "</td>" +
+            '<td class="c">' + esc(l.destination) + "</td>" +
+            '<td class="c">' + esc(l.item_name) + "</td>" +
+            '<td class="r">' + numOrBlank(l.quantity) + "</td>" +
+            '<td class="c">' + esc(l.unit) + "</td>" +
+            '<td class="r">' + numOrBlank(l.unit_price) + "</td>" +
+            '<td class="r">' + num(amount) + "</td>" +
+            "<td>" + esc(l.note) + "</td>" +
+          "</tr>"
+        );
+      }).join("");
+      var foot = '<tr class="foot"><td>合計</td><td colspan="6"></td><td class="r">' + num(pageTotal) + "</td><td></td></tr>";
+
+      var header;
+      var totalsRow = "";
+      if (pi === 0) {
+        header =
+          '<div class="title">請求書</div>' +
+          '<div class="head">' +
+            '<div class="to">' +
+              '<div class="name">' + esc(customerName) + "　様</div>" +
+              '<div class="greet">いつもお世話になっています。下記の通り請求申し上げます。<br>今後共宜しくお願い致します。</div>' +
+            "</div>" +
+            '<div class="from">' +
+              '<img class="stamp" src="img/stamp.png" alt="" onerror="this.style.visibility=\'hidden\'">' +
+              "<div>" +
+                '<div class="co">' +
+                  '<div class="row2"><span class="issue">' + warekiDate(inv.issue_date) + "</span><span>〒" + esc(co.postal_code) + "</span></div>" +
+                  "<div>" + esc(co.address) + "</div>" +
+                  '<div class="cname">' + esc(co.company_name) + "</div>" +
+                  '<div class="row2"><span>TEL' + esc(co.tel) + "</span><span>FAX" + esc(co.fax) + "</span></div>" +
+                  '<div class="bank">' + esc(co.bank_info) + "</div>" +
+                  "<div>登録番号　" + esc(co.registration_no) + "</div>" +
+                "</div>" +
+              "</div>" +
+            "</div>" +
+          "</div>" +
+          '<table class="summary">' +
+            "<tr><th>前回御請求金額</th><th>御入金額</th><th>前回分残額</th><th>当月分請求金額</th><th>今回御請求金額</th></tr>" +
+            "<tr><td>" + num(inv.prev_billed) + "</td><td>" + num(inv.paid) + "</td><td>" + num(prevBalance) + "</td><td>" + num(currentTotal) + '</td><td class="strong">¥' + num(grand) + "</td></tr>" +
+          "</table>";
+        totalsRow =
+          '<tr class="totals">' +
+            '<td colspan="2">合計請求金額</td>' +
+            '<td colspan="2" class="r">¥' + num(currentTotal) + "</td>" +
+            '<td colspan="2"></td>' +
+            "<td>合計金額</td>" +
+            '<td class="r">¥' + num(subtotal) + "</td>" +
+            '<td><span>消費税（' + num(inv.tax_rate) + '%）</span><span style="float:right;">' + num(tax) + "</span></td>" +
+          "</tr>";
+      } else {
+        header =
+          '<div class="page-head">' +
+            '<div class="name">' + esc(customerName) + "　様</div>" +
+            '<div class="right"><span class="co">' + esc(co.company_name) + "</span><span>NO." + (pi + 1) + "</span></div>" +
+          "</div>";
+      }
+      return '<div class="page">' + header +
+        '<table class="lines">' + colgroup + "<thead>" + totalsRow + headRow + "</thead><tbody>" + body + foot + "</tbody></table>" +
+        "</div>";
+    }).join("");
+
+    document.getElementById("pages").innerHTML = html;
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
