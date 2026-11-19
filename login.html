@@ -103,6 +103,12 @@
       return;
     }
 
+    // 管理者（admin）はどの種別からでもログインでき、選んだ画面に入る
+    if (profile.role === "admin") {
+      window.location.href = ROLE_META[selectedRole].page;
+      return;
+    }
+
     if (profile.role !== selectedRole) {
       showError("選択した種別（" + ROLE_META[selectedRole].label + "）と、このアカウントの権限が一致しません。");
       await supabaseClient.auth.signOut();
@@ -120,7 +126,7 @@
 
   (async function initRedirectIfLoggedIn() {
     var profile = await getMyProfile();
-    if (profile) window.location.href = (ROLE_META[profile.role] || ROLE_META.driver).page;
+    if (profile) window.location.href = (profile.role === "admin" ? ROLE_META.office : (ROLE_META[profile.role] || ROLE_META.driver)).page;
   })();
 </script>
 </body>

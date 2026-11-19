@@ -101,7 +101,7 @@
     document.getElementById("date-input").value = todayKey();
 
     var [{ data: driverRows }, { data: rateRows }] = await Promise.all([
-      supabaseClient.from("profiles").select("*").eq("role", "driver").order("name"),
+      supabaseClient.from("profiles").select("*").in("role", ["driver", "admin"]).order("name"),
       supabaseClient.from("rate_items").select("*")
     ]);
     drivers = driverRows || [];
