@@ -126,3 +126,8 @@ header.topbar nav .btn.admin-switch:hover { background: #047857; border-color: #
 header.topbar nav .btn.admin-switch.is-current { background: #f59e0b; border-color: #f59e0b; color: #1e293b; }
 .page-header .who { font-size: 24px; }
 .btn-small { padding: 6px 12px; }
+
+/* 2026-11-21 登録・管理系のボタンは薄い青。「を追加/削除する」は小さめの文字 */
+header.topbar nav .btn.btn-light { background: #dbeafe; color: #1e3a8a; border-color: #93c5fd; }
+header.topbar nav .btn.btn-light:hover { background: #bfdbfe; border-color: #60a5fa; }
+header.topbar nav .btn .btn-sub { font-size: 14px; font-weight: 700; margin-left: 1px; }
