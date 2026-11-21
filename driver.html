@@ -22,10 +22,10 @@
       <div class="date" id="driver-vehicle-display"></div>
     </div>
     <div class="toolbar">
-      <label style="font-size:13px;color:#475569;">対象日
+      <label style="font-size: 20px;color:#475569;">対象日
         <input type="date" id="date-input">
       </label>
-      <label style="font-size:13px;color:#475569;">車番
+      <label style="font-size: 20px;color:#475569;">車番
         <input type="text" id="vehicle-input" style="width:80px;padding:8px;border:1px solid #e2e8f0;border-radius:8px;">
       </label>
     </div>
@@ -56,7 +56,7 @@
     </div>
     <div class="add-row-wrap">
       <button class="btn btn-primary" id="add-row-btn">＋ 行を追加</button>
-      <span id="total-label" style="color:#64748b;font-size:13px;"></span>
+      <span id="total-label" style="color:#64748b;font-size: 20px;"></span>
     </div>
   </div>
 </div>
@@ -73,6 +73,7 @@
   var customers = [];
   var rateItems = [];
   var rowsChannel = null;
+  var myDriverMasterId = null;   // 運転手リスト上の自分
 
   function esc(s) {
     return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -111,6 +112,8 @@
       supabaseClient.from("rate_items").select("*")
     ]);
     customers = customerRows || [];
+    var { data: me } = await supabaseClient.from("drivers").select("id").eq("profile_id", profile.id).maybeSingle();
+    myDriverMasterId = me ? me.id : null;
     rateItems = rateRows || [];
 
     document.getElementById("date-input").addEventListener("change", loadDay);
@@ -142,7 +145,7 @@
     } else {
       var { data: created, error } = await supabaseClient
         .from("report_days")
-        .insert({ driver_id: profile.id, report_date: dateKey, vehicle_no: profile.vehicle_no || null })
+        .insert({ driver_id: profile.id, driver_master_id: myDriverMasterId, report_date: dateKey, vehicle_no: profile.vehicle_no || null })
         .select()
         .single();
       if (error) { alert("日報の作成に失敗しました: " + error.message); return; }
@@ -231,6 +234,7 @@
     var { error } = await supabaseClient.from("report_rows").insert({
       report_day_id: reportDayId,
       seq: nextSeq,
+      origin: "境港",
       status: "running"
     });
     if (error) { alert("行の追加に失敗しました: " + error.message); return; }

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>荷主リスト｜株式会社ながたに</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+  .inline-form { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+  .inline-form input { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 20px; }
+  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 20px; padding: 0; font-family: inherit; }
+  .hint-text { font-size: 20px; color: #64748b; margin: 0 0 12px; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <h1>📋 荷主を追加/削除する</h1>
+  <nav>
+    <a class="btn" id="back-link" href="haisya.html">← 配車メモ入力に戻る</a>
+    <button class="btn" id="logout-btn">ログアウト</button>
+  </nav>
+</header>
+
+<div class="container">
+  <div class="card">
+    <p class="hint-text">ここに登録した荷主が、配車メモの表（タブ）や配車日報の「荷主」の選択肢になります。<br>「請求書の宛名」は請求書に印字される正式名称です（空欄なら荷主名）。</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>荷主名</th><th>請求書の宛名</th><th style="width:90px;"></th></tr></thead>
+        <tbody id="list-body"></tbody>
+      </table>
+    </div>
+    <div class="inline-form">
+      <input id="new-name" placeholder="荷主名（例: ホクスイ）" style="min-width:240px;">
+      <input id="new-invoice-name" placeholder="請求書の宛名（例: （株）ホクスイ）" style="min-width:300px;">
+      <button class="btn btn-primary" id="add-btn">＋ 追加</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/supabase.js"></script>
+<script>
+(function () {
+  "use strict";
+  var items = [];
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  async function init() {
+    var profile = await requireProfileIn(["haisya", "office"]);
+    if (!profile) return;
+    if (profile.role === "office") document.getElementById("back-link").href = "office.html";
+    document.getElementById("logout-btn").addEventListener("click", signOut);
+    document.getElementById("add-btn").addEventListener("click", addItem);
+    document.getElementById("list-body").addEventListener("click", onDelete);
+    document.getElementById("list-body").addEventListener("change", onChange);
+    await load();
+  }
+
+  async function load() {
+    var { data, error } = await supabaseClient.from("customers").select("*").order("name");
+    if (error) { alert("取得に失敗しました: " + error.message); return; }
+    items = data || [];
+    var tbody = document.getElementById("list-body");
+    if (items.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#94a3b8;">荷主がまだ登録されていません</td></tr>';
+      return;
+    }
+    tbody.innerHTML = items.map(function (c) {
+      return (
+        '<tr data-id="' + c.id + '">' +
+          '<td><input data-field="name" value="' + esc(c.name) + '"></td>' +
+          '<td><input data-field="invoice_name" value="' + esc(c.invoice_name) + '" placeholder="（荷主名と同じ）"></td>' +
+          '<td><button class="del-link" data-delete="1">削除</button></td>' +
+        "</tr>"
+      );
+    }).join("");
+  }
+
+  async function addItem() {
+    var nameInput = document.getElementById("new-name");
+    var invInput = document.getElementById("new-invoice-name");
+    var name = nameInput.value.trim();
+    if (!name) { alert("荷主名を入力してください。"); return; }
+    var { error } = await supabaseClient.from("customers").insert({ name: name, invoice_name: invInput.value.trim() || null });
+    if (error) { alert("追加に失敗しました（同じ名前の荷主が既にある可能性があります）: " + error.message); return; }
+    nameInput.value = "";
+    invInput.value = "";
+    await load();
+  }
+
+  async function onChange(e) {
+    var field = e.target.getAttribute("data-field");
+    if (!field) return;
+    var id = e.target.closest("tr").getAttribute("data-id");
+    var v = e.target.value.trim();
+    if (field === "name" && !v) { alert("荷主名は空にできません。"); await load(); return; }
+    var patch = {};
+    patch[field] = v || null;
+    var { error } = await supabaseClient.from("customers").update(patch).eq("id", id);
+    if (error) { alert("保存に失敗しました: " + error.message); await load(); }
+  }
+
+  async function onDelete(e) {
+    if (!e.target.hasAttribute("data-delete")) return;
+    var id = e.target.closest("tr").getAttribute("data-id");
+    var c = items.find(function (x) { return x.id === id; });
+    if (!confirm((c ? c.name : "この荷主") + " を削除しますか？（単価マスタも削除されます）")) return;
+    var { error } = await supabaseClient.from("customers").delete().eq("id", id);
+    if (error) { alert("削除できませんでした。配車メモ・配車日報・請求書で使われている荷主は削除できません。"); return; }
+    await load();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

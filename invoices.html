@@ -7,26 +7,26 @@
 <link rel="stylesheet" href="css/style.css">
 <style>
   .form-grid { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
-  .form-grid label { font-size: 12px; color: #475569; display: flex; flex-direction: column; gap: 4px; }
+  .form-grid label { font-size: 20px; color: #475569; display: flex; flex-direction: column; gap: 4px; }
   .form-grid input, .form-grid select, .form-grid textarea {
-    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 13px;
+    padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 20px;
   }
   .summary-box { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-top: 14px; }
   .summary-box div { background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
-  .summary-box .k { font-size: 11px; color: #64748b; }
-  .summary-box .v { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .summary-box .k { font-size: 20px; color: #64748b; }
+  .summary-box .v { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
   .summary-box .grand { background: #eff6ff; border-color: #bfdbfe; }
-  .warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-top: 12px; }
+  .warn { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; border-radius: 8px; padding: 10px 12px; font-size: 20px; margin-top: 12px; }
   .warn ul { margin: 6px 0 0; padding-left: 20px; }
-  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 12px; padding: 0; font-family: inherit; }
-  .link-btn { color: #2563eb; background: none; border: none; cursor: pointer; font-size: 13px; padding: 0; font-family: inherit; text-decoration: underline; }
+  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 20px; padding: 0; font-family: inherit; }
+  .link-btn { color: #2563eb; background: none; border: none; cursor: pointer; font-size: 20px; padding: 0; font-family: inherit; text-decoration: underline; }
   tr.no-price td { background: #fef2f2; }
   tr.manual td:first-child { border-left: 3px solid #a78bfa; }
   #lines-body input { padding: 5px 6px; }
-  details.card summary { cursor: pointer; font-weight: 700; font-size: 14px; }
+  details.card summary { cursor: pointer; font-weight: 700; font-size: 20px; }
   .badge-draft { background: #f1f5f9; color: #475569; }
   .badge-issued { background: var(--green-bg); color: var(--green-fg); }
-  .legend { font-size: 12px; color: #64748b; margin-top: 8px; }
+  .legend { font-size: 20px; color: #64748b; margin-top: 8px; }
 </style>
 </head>
 <body>
@@ -50,7 +50,7 @@
       <label>発行日<input type="date" id="new-issue"></label>
       <button class="btn btn-primary" id="create-btn">配車日報から作成</button>
     </div>
-    <div class="legend">対象期間内に「完了」になっている配車日報の明細を、日付・着地・品名・単価ごとにまとめて請求書の明細にします。</div>
+    <div class="legend">対象期間内に「完了」になっている配車日報の明細を、日付・着地・品名・単価ごとにまとめて請求書の明細にします（日報の備考も引き継ぎます）。</div>
   </div>
 
   <div class="section-title">作成済みの請求書</div>
@@ -267,7 +267,7 @@
 
     var { data: rows, error } = await supabaseClient
       .from("report_rows")
-      .select("id, seq, origin, destination, item_name, quantity, unit_price, status, created_at, report_days!inner(report_date, vehicle_no)")
+      .select("id, seq, origin, destination, item_name, quantity, unit_price, note, status, created_at, report_days!inner(report_date, vehicle_no)")
       .eq("customer_id", current.customer_id)
       .gte("report_days.report_date", current.period_start)
       .lte("report_days.report_date", current.period_end);
@@ -282,16 +282,16 @@
       return (a.seq || 0) - (b.seq || 0);
     });
 
-    // 日付・発地・着地・品名・単価が同じものは数量を合算
+    // 日付・発地・着地・品名・単価・備考が同じものは数量を合算
     var groups = [];
     var index = {};
     done.forEach(function (r) {
-      var key = [r.report_days.report_date, r.origin || "", r.destination || "", r.item_name || "", r.unit_price == null ? "" : r.unit_price].join("|");
+      var key = [r.report_days.report_date, r.origin || "", r.destination || "", r.item_name || "", r.unit_price == null ? "" : r.unit_price, r.note || ""].join("|");
       if (index[key] === undefined) {
         index[key] = groups.length;
         groups.push({
           line_date: r.report_days.report_date, origin: r.origin, destination: r.destination,
-          item_name: r.item_name, quantity: 0, unit_price: r.unit_price
+          item_name: r.item_name, quantity: 0, unit_price: r.unit_price, note: r.note
         });
       }
       groups[index[key]].quantity += Number(r.quantity || 0);
@@ -304,7 +304,7 @@
       var payload = groups.map(function (g, i) {
         return {
           invoice_id: current.id, seq: i, line_date: g.line_date, origin: g.origin, destination: g.destination,
-          item_name: g.item_name, quantity: g.quantity, unit: "個", unit_price: g.unit_price, source: "report"
+          item_name: g.item_name, quantity: g.quantity, unit: "個", unit_price: g.unit_price, note: g.note, source: "report"
         };
       });
       var { error: insErr } = await supabaseClient.from("invoice_lines").insert(payload);
@@ -464,7 +464,7 @@
       if (error) { alert("合計の保存に失敗しました: " + error.message); return; }
       current.subtotal = subtotal; current.tax = tax; current.grand_total = grand;
       await loadInvoices();
-    } else if (!save && (Number(current.subtotal) !== subtotal || Number(current.tax) !== tax || Number(current.grand_total) !== grand)) {
+    } else if (!save && !isLocked() && (Number(current.subtotal) !== subtotal || Number(current.tax) !== tax || Number(current.grand_total) !== grand)) {
       // 作成直後など、保存値と計算値がずれていれば保存する
       await recalc(true);
     }
@@ -476,7 +476,7 @@
     var msgs = [];
     var { data: pending } = await supabaseClient
       .from("report_rows")
-      .select("status, destination, item_name, report_days!inner(report_date, profiles(name))")
+      .select("status, destination, item_name, report_days!inner(report_date, profiles(name), drivers(name))")
       .eq("customer_id", current.customer_id)
       .neq("status", "done")
       .gte("report_days.report_date", current.period_start)
@@ -484,7 +484,7 @@
     if (pending && pending.length) {
       msgs.push("完了になっていない配車日報が " + pending.length + " 件あります（請求書には含まれていません）：<ul>" +
         pending.slice(0, 10).map(function (p) {
-          var who = p.report_days.profiles ? p.report_days.profiles.name : "";
+          var who = dayDriverName(p.report_days);
           return "<li>" + esc(p.report_days.report_date) + "　" + esc(who) + "　" + esc(p.destination || "-") + "　" + esc(p.item_name || "-") +
             "（" + (p.status === "revising" ? "修正中" : "運行中") + "）</li>";
         }).join("") + (pending.length > 10 ? "<li>ほか " + (pending.length - 10) + " 件</li>" : "") + "</ul>");

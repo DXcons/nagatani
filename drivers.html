@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>運転手リスト｜株式会社ながたに</title>
+<link rel="stylesheet" href="css/style.css">
+<style>
+  .inline-form { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; align-items: center; }
+  .inline-form input, .inline-form select { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 20px; }
+  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 20px; padding: 0; font-family: inherit; }
+  .hint-text { font-size: 20px; color: #64748b; margin: 0 0 12px; }
+  tr.inactive td { color: #94a3b8; background: #f8fafc; }
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <h1>📋 運転手を追加/削除する</h1>
+  <nav>
+    <a class="btn" id="back-link" href="haisya.html">← 配車メモ入力に戻る</a>
+    <button class="btn" id="logout-btn">ログアウト</button>
+  </nav>
+</header>
+
+<div class="container">
+  <div class="card">
+    <p class="hint-text">
+      ここに登録した運転手が、配車メモの表と事務の割り当ての選択肢になります。下請けの業者も登録できます。<br>
+      「ログイン」は、その運転手がスマホで日報を入力するときのアカウントです（管理者が作成。なければ空欄のままで大丈夫です）。<br>
+      辞めた人・取引のなくなった業者は「使用中」のチェックを外すと、選択肢に出なくなります。
+    </p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>名前</th><th style="width:110px;">車番</th><th style="width:140px;">区分</th>
+          <th style="width:240px;">ログイン</th><th style="width:100px;">使用中</th><th style="width:80px;"></th>
+        </tr></thead>
+        <tbody id="list-body"></tbody>
+      </table>
+    </div>
+    <div class="inline-form">
+      <input id="new-name" placeholder="名前（例: 石井）" style="min-width:200px;">
+      <input id="new-vehicle" placeholder="車番（例: 88）" style="width:150px;">
+      <select id="new-kind"><option value="社員">社員</option><option value="下請け">下請け</option></select>
+      <button class="btn btn-primary" id="add-btn">＋ 追加</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/supabase.js"></script>
+<script>
+(function () {
+  "use strict";
+  var items = [];
+  var accounts = [];
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  async function init() {
+    var profile = await requireProfileIn(["haisya", "office"]);
+    if (!profile) return;
+    if (profile.role === "office") document.getElementById("back-link").href = "office.html";
+    document.getElementById("logout-btn").addEventListener("click", signOut);
+    document.getElementById("add-btn").addEventListener("click", addItem);
+    document.getElementById("list-body").addEventListener("click", onDelete);
+    document.getElementById("list-body").addEventListener("change", onChange);
+    var { data: acc } = await supabaseClient.from("profiles").select("id, name, role").in("role", ["driver", "admin"]).order("name");
+    accounts = acc || [];
+    await load();
+  }
+
+  async function load() {
+    var { data, error } = await supabaseClient.from("drivers").select("*").order("active", { ascending: false }).order("kind").order("sort_order").order("name");
+    if (error) { alert("取得に失敗しました: " + error.message + "\n（運転手リスト用のSQLが未適用の可能性があります）"); return; }
+    items = data || [];
+    var tbody = document.getElementById("list-body");
+    if (items.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#94a3b8;">運転手がまだ登録されていません</td></tr>';
+      return;
+    }
+    var used = {};
+    items.forEach(function (d) { if (d.profile_id) used[d.profile_id] = d.id; });
+    tbody.innerHTML = items.map(function (d) {
+      var accOptions = '<option value="">（なし）</option>' + accounts.filter(function (a) {
+        return !used[a.id] || used[a.id] === d.id;
+      }).map(function (a) {
+        return '<option value="' + a.id + '"' + (a.id === d.profile_id ? " selected" : "") + ">" + esc(a.name) + "</option>";
+      }).join("");
+      return (
+        '<tr data-id="' + d.id + '" class="' + (d.active ? "" : "inactive") + '">' +
+          '<td><input data-field="name" value="' + esc(d.name) + '"></td>' +
+          '<td><input data-field="vehicle_no" value="' + esc(d.vehicle_no) + '"></td>' +
+          '<td><select data-field="kind"><option value="社員"' + (d.kind === "社員" ? " selected" : "") + '>社員</option>' +
+            '<option value="下請け"' + (d.kind === "下請け" ? " selected" : "") + ">下請け</option></select></td>" +
+          '<td><select data-field="profile_id">' + accOptions + "</select></td>" +
+          '<td style="text-align:center;"><input type="checkbox" data-field="active" style="width:24px;height:24px;"' + (d.active ? " checked" : "") + "></td>" +
+          '<td><button class="del-link" data-delete="1">削除</button></td>' +
+        "</tr>"
+      );
+    }).join("");
+  }
+
+  async function addItem() {
+    var name = document.getElementById("new-name").value.trim();
+    if (!name) { alert("名前を入力してください。"); return; }
+    var { error } = await supabaseClient.from("drivers").insert({
+      name: name,
+      vehicle_no: document.getElementById("new-vehicle").value.trim() || null,
+      kind: document.getElementById("new-kind").value
+    });
+    if (error) { alert("追加に失敗しました: " + error.message); return; }
+    document.getElementById("new-name").value = "";
+    document.getElementById("new-vehicle").value = "";
+    await load();
+  }
+
+  async function onChange(e) {
+    var field = e.target.getAttribute("data-field");
+    if (!field) return;
+    var id = e.target.closest("tr").getAttribute("data-id");
+    var value;
+    if (field === "active") value = e.target.checked;
+    else value = e.target.value.trim() || null;
+    if (field === "name" && !value) { alert("名前は空にできません。"); await load(); return; }
+    var patch = {};
+    patch[field] = value;
+    var { error } = await supabaseClient.from("drivers").update(patch).eq("id", id);
+    if (error) { alert("保存に失敗しました: " + error.message); }
+    await load();
+  }
+
+  async function onDelete(e) {
+    if (!e.target.hasAttribute("data-delete")) return;
+    var id = e.target.closest("tr").getAttribute("data-id");
+    var d = items.find(function (x) { return x.id === id; });
+    if (!confirm((d ? d.name : "この運転手") + " を削除しますか？")) return;
+    var { error } = await supabaseClient.from("drivers").delete().eq("id", id);
+    if (error) { alert("配車日報で使われているため削除できません。代わりに「使用中」のチェックを外してください。"); return; }
+    await load();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>

@@ -8,21 +8,52 @@
 <style>
   .sheet-card { margin-bottom: 22px; }
   .sheet-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 8px; }
-  .sheet-head .name { font-size: 15px; font-weight: 700; }
-  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 12px; padding: 0; font-family: inherit; }
+  .sheet-head .name { font-size: 20px; font-weight: 700; }
+  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 20px; padding: 0; font-family: inherit; }
   .grid-table th, .grid-table td { text-align: center; }
   .grid-table th:first-child, .grid-table td:first-child { text-align: left; white-space: nowrap; }
   .grid-table input[type="number"] { width: 70px; text-align: right; }
   .grid-table input[type="text"], .grid-table input:not([type]) { width: 130px; }
   .col-head-name { display: inline-flex; align-items: center; gap: 4px; }
-  .add-col-select { padding: 6px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: 12px; width: 130px; }
+  .add-col-select { padding: 6px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: 20px; width: 130px; }
   .add-sheet-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 20px; }
   .tab-bar { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
   .tab-btn {
     padding: 6px 14px; border-radius: 999px; border: 1px solid var(--border); background: #fff;
-    cursor: pointer; font-size: 13px; font-family: inherit; color: #475569;
+    cursor: pointer; font-size: 20px; font-family: inherit; color: #475569;
   }
   .tab-btn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .tab-btn { font-weight: 700; padding: 8px 18px; }
+
+  /* 配車メモの表：文字は大きくせず太字で読みやすく（列が多いため） */
+  .grid-table { overflow: visible; border-radius: 0; }
+  .grid-table th, .grid-table td { font-size: 15px; font-weight: 700; padding: 6px 6px; color: #0f172a; }
+  .grid-table thead th { background: #e2e8f0; color: #0f172a; }
+  .grid-table input { font-size: 16px; font-weight: 700; padding: 4px 6px; color: #0f172a; }
+  .grid-table .add-col-select { font-size: 15px; font-weight: 700; }
+  .grid-table .del-link { font-size: 14px; }
+  .grid-table tbody tr:nth-child(even) td { background: #f8fafc; }
+
+  /* 表側（品名の列）を固定：右にスクロールしても見える */
+  .grid-table th:first-child, .grid-table td:first-child {
+    position: sticky; left: 0; z-index: 2; background: #fff;
+    box-shadow: 3px 0 0 #94a3b8;
+  }
+  .grid-table tbody tr:nth-child(even) td:first-child { background: #f8fafc; }
+  .grid-table thead th:first-child { background: #e2e8f0; z-index: 3; }
+
+  /* 運転手の行 */
+  .grid-table tr.driver-row td { background: #fef9c3 !important; }
+  .grid-table select.driver-select { font-size: 15px; font-weight: 700; padding: 4px; border: 1px solid #ca8a04; border-radius: 6px; width: 100%; min-width: 90px; font-family: inherit; }
+
+  /* 荷主ごとの表をブラウザのタブのように切り替える */
+  .customer-tabs { display: flex; gap: 4px; flex-wrap: wrap; align-items: flex-end; border-bottom: 4px solid var(--tab-color, #2563eb); margin-bottom: 0; }
+  .customer-tab {
+    padding: 10px 22px; border-radius: 12px 12px 0 0; border: 2px solid var(--c); border-bottom: none;
+    background: var(--c-light); color: var(--c); font-size: 20px; font-weight: 700; cursor: pointer; font-family: inherit;
+  }
+  .customer-tab.active { background: var(--c); color: #fff; padding-top: 14px; }
+  .sheet-card { border-top-left-radius: 0; border-top-right-radius: 0; border-top: none; }
 </style>
 </head>
 <body>
@@ -30,9 +61,11 @@
 <header class="topbar">
   <h1>📋 配車メモ入力</h1>
   <nav>
-    <a class="btn btn-small" href="destinations.html">配送先リスト</a>
-    <a class="btn btn-small" href="box_types.html">品名リスト</a>
-    <button class="btn btn-small" id="logout-btn">ログアウト</button>
+    <a class="btn" href="customers.html">荷主を追加/削除する</a>
+    <a class="btn" href="drivers.html">運転手を追加/削除する</a>
+    <a class="btn" href="destinations.html">配送先を追加/削除する</a>
+    <a class="btn" href="box_types.html">品名リスト</a>
+    <button class="btn" id="logout-btn">ログアウト</button>
   </nav>
 </header>
 
@@ -43,7 +76,7 @@
       <div class="date" id="date-display"></div>
     </div>
     <div class="toolbar">
-      <label style="font-size:13px;color:#475569;">対象日
+      <label style="font-size: 20px;color:#475569;">対象日
         <input type="date" id="date-input">
       </label>
     </div>
@@ -79,6 +112,22 @@
   var blankSlotSeq = 0;
   var backfilledSheetIds = {};
   var channel = null;
+  var driversMaster = [];
+  var activeSheetId = null;     // 今表示している荷主の表
+  var lastCreatedSheetId = null;
+
+  // 荷主タブの色（荷主の並び順で決まる）
+  var TAB_COLORS = [
+    ["#2563eb", "#dbeafe"], ["#059669", "#d1fae5"], ["#d97706", "#fef3c7"], ["#db2777", "#fce7f3"],
+    ["#7c3aed", "#ede9fe"], ["#0891b2", "#cffafe"], ["#dc2626", "#fee2e2"], ["#65a30d", "#ecfccb"]
+  ];
+  function colorOfCustomer(customerId) {
+    var i = customers.findIndex(function (c) { return c.id === customerId; });
+    return TAB_COLORS[(i < 0 ? 0 : i) % TAB_COLORS.length];
+  }
+  function columnOf(sheetId, destination) {
+    return (columnsBySheet[sheetId] || []).find(function (c) { return c.destination === destination; });
+  }
 
   var TABS = ["200円", "250円", "280円", "380円", "その他"];
 
@@ -115,14 +164,16 @@
     document.getElementById("haisya-name-display").textContent = profile.name + " さん";
     document.getElementById("date-input").value = todayKey();
 
-    var [{ data: customerRows }, { data: destRows }, { data: boxRows }] = await Promise.all([
+    var [{ data: customerRows }, { data: destRows }, { data: boxRows }, { data: driverRows }] = await Promise.all([
       supabaseClient.from("customers").select("*").order("name"),
       supabaseClient.from("destinations").select("*").order("name"),
-      supabaseClient.from("box_types").select("*").order("sort_order").order("name")
+      supabaseClient.from("box_types").select("*").order("sort_order").order("name"),
+      supabaseClient.from("drivers").select("*").eq("active", true).order("kind").order("sort_order").order("name")
     ]);
     customers = customerRows || [];
     destinationsMaster = destRows || [];
     boxTypesMaster = boxRows || [];
+    driversMaster = driverRows || [];
 
     document.getElementById("date-input").addEventListener("change", loadDate);
     document.getElementById("add-sheet-btn").addEventListener("click", onAddSheet);
@@ -290,9 +341,36 @@
     return labelInput ? labelInput.value.trim() : "";
   }
 
+  // 荷主ごとの表を切り替えるタブ（ブラウザのタブ風・荷主ごとに色分け）
+  function customerTabBar() {
+    var active = sheets.find(function (s) { return s.id === activeSheetId; });
+    var activeColor = active ? colorOfCustomer(active.customer_id)[0] : "#2563eb";
+    return '<div class="customer-tabs" style="--tab-color:' + activeColor + ';">' + sheets.map(function (s) {
+      var col = colorOfCustomer(s.customer_id);
+      var name = s.customers ? s.customers.name : "(荷主未設定)";
+      return '<button type="button" class="customer-tab' + (s.id === activeSheetId ? " active" : "") +
+        '" style="--c:' + col[0] + ';--c-light:' + col[1] + ';" data-sheet-tab="' + s.id + '">' + esc(name) + "</button>";
+    }).join("") + "</div>";
+  }
+
+  function driverOptions(selectedId) {
+    var groups = { "社員": [], "下請け": [] };
+    driversMaster.forEach(function (d) { (groups[d.kind] || groups["社員"]).push(d); });
+    var opt = function (d) {
+      return '<option value="' + d.id + '"' + (d.id === selectedId ? " selected" : "") + ">" +
+        esc(d.name) + (d.vehicle_no ? "（" + esc(d.vehicle_no) + "）" : "") + "</option>";
+    };
+    return '<option value="">（未定）</option>' +
+      (groups["社員"].length ? '<optgroup label="社員">' + groups["社員"].map(opt).join("") + "</optgroup>" : "") +
+      (groups["下請け"].length ? '<optgroup label="下請け">' + groups["下請け"].map(opt).join("") + "</optgroup>" : "");
+  }
+
   function render() {
     var container = document.getElementById("sheets-container");
-    container.innerHTML = sheets.map(function (sheet) {
+    if (!sheets.some(function (s) { return s.id === activeSheetId; })) {
+      activeSheetId = sheets.length ? sheets[0].id : null;
+    }
+    container.innerHTML = customerTabBar() + sheets.filter(function (s) { return s.id === activeSheetId; }).map(function (sheet) {
       if (!(sheet.id in activeTabBySheet)) activeTabBySheet[sheet.id] = TABS[0];
       var activeTab = activeTabBySheet[sheet.id];
       var tabPlaceholder = parseInt(activeTab, 10) || "";
@@ -321,6 +399,14 @@
         '<option value="">＋列を追加</option>' +
         availableDests.map(function (d) { return '<option value="' + esc(d.name) + '">' + esc(d.name) + "</option>"; }).join("") +
         "</select></th>";
+
+      // 着地（列）ごとの運転手
+      var driverRow = '<tr class="driver-row"><td>🚚 運転手</td><td></td>' +
+        cols.map(function (c) {
+          return '<td><select class="driver-select" data-driver-col="' + c.id + '" data-driver-dest="' + esc(c.destination) + '">' +
+            driverOptions(c.driver_id) + "</select></td>";
+        }).join("") +
+        "<td></td><td></td><td></td></tr>";
 
       var defaultNames = defaultRowNames();
       var bodyRows = rowNames.map(function (name) {
@@ -389,7 +475,7 @@
           tabBar +
           '<div class="table-wrap"><table class="grid-table">' +
             "<thead><tr><th>品名＼着地</th><th>単価</th>" + headerCols + addColSelect + "<th>個数横合計</th><th>合計金額</th></tr></thead>" +
-            "<tbody>" + bodyRows + blankRows + footerRow + noteRow + "</tbody>" +
+            "<tbody>" + driverRow + bodyRows + blankRows + footerRow + noteRow + "</tbody>" +
           "</table></div>" +
           addRowBar +
           datalist +
@@ -404,6 +490,7 @@
       .insert({ memo_date: dateKey(), customer_id: customerId, created_by: profile.id })
       .select().single();
     if (error) { return error; }
+    lastCreatedSheetId = sheet.id;
     if (destinationsMaster.length > 0) {
       var rows = destinationsMaster.map(function (d, idx) {
         return { sheet_id: sheet.id, destination: d.name, sort_order: idx };
@@ -418,10 +505,25 @@
     if (!customerId) { alert("荷主を選択してください。"); return; }
     var error = await createSheetWithColumns(customerId);
     if (error) { alert("表の作成に失敗しました: " + error.message); return; }
+    activeSheetId = lastCreatedSheetId;   // 作った表のタブを開く
+    await loadDate();
+  }
+
+  // 列の運転手を変更 → その列の未割当メモにも反映（事務の割り当て画面で最初から選ばれる）
+  async function onDriverChange(e) {
+    var colId = e.target.getAttribute("data-driver-col");
+    var dest = e.target.getAttribute("data-driver-dest");
+    var sheetId = e.target.closest("[data-sheet-id]").getAttribute("data-sheet-id");
+    var driverId = e.target.value || null;
+    var { error } = await supabaseClient.from("memo_sheet_columns").update({ driver_id: driverId }).eq("id", colId);
+    if (error) { alert("運転手の保存に失敗しました: " + error.message); return; }
+    await supabaseClient.from("dispatch_memo_items").update({ planned_driver_id: driverId })
+      .eq("memo_sheet_id", sheetId).eq("destination", dest).eq("assigned", false);
     await loadDate();
   }
 
   async function onContainerChange(e) {
+    if (e.target.hasAttribute("data-driver-col")) { await onDriverChange(e); return; }
     if (e.target.hasAttribute("data-cell")) { await onCellChange(e); return; }
     if (e.target.hasAttribute("data-rate")) { await onRateChange(e); return; }
     if (e.target.hasAttribute("data-note")) { await onNoteChange(e); return; }
@@ -458,7 +560,8 @@
     } else {
       var { error } = await supabaseClient.from("dispatch_memo_items").insert({
         memo_date: dateKey(), customer_id: sheet.customer_id, memo_sheet_id: sheetId,
-        destination: destName, item_name: itemName, quantity: qty, created_by: profile.id
+        origin: "境港", destination: destName, item_name: itemName, quantity: qty, created_by: profile.id,
+        planned_driver_id: (columnOf(sheetId, destName) || {}).driver_id || null
       });
       if (error) { alert("保存に失敗しました: " + error.message); }
       else { graduateBlankSlot(tr, sheetId); }
@@ -511,6 +614,13 @@
   }
 
   async function onContainerClick(e) {
+    var sheetTab = e.target.getAttribute("data-sheet-tab");
+    if (sheetTab) {
+      activeSheetId = sheetTab;
+      render();
+      return;
+    }
+
     var tabSheetId = e.target.getAttribute("data-tab-for");
     var tabName = e.target.getAttribute("data-tab-name");
     if (tabSheetId && tabName) {

@@ -7,8 +7,8 @@
 <link rel="stylesheet" href="css/style.css">
 <style>
   .inline-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
-  .inline-form input { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 13px; }
-  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 12px; padding: 0; font-family: inherit; }
+  .inline-form input { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 20px; }
+  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 20px; padding: 0; font-family: inherit; }
 </style>
 </head>
 <body>
@@ -25,10 +25,10 @@
 <div class="container">
   <div class="card">
     <div class="section-title" style="margin-top:0;">品名（箱種）一覧</div>
-    <p style="font-size:12px;color:#94a3b8;margin-top:-4px;">「既定表示」をONにしたものは、配車メモの表で最初から行として表示されます。</p>
+    <p style="font-size: 20px;color:#94a3b8;margin-top:-4px;">「既定表示」をONにしたものは、配車メモの表で最初から行として表示されます。<br>「請求書用の名前」は、事務が割り当てたときに配車日報・請求書に入る名前です（空欄なら品名と同じ）。</p>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>品名（箱種）</th><th style="width:100px;">既定表示</th><th style="width:60px;"></th></tr></thead>
+        <thead><tr><th>品名（箱種）</th><th style="width:200px;">請求書用の名前</th><th style="width:100px;">既定表示</th><th style="width:60px;"></th></tr></thead>
         <tbody id="list-body"></tbody>
       </table>
     </div>
@@ -70,13 +70,14 @@
   function render() {
     var tbody = document.getElementById("list-body");
     if (items.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="3" style="text-align:center;color:#94a3b8;">品名がまだ登録されていません</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="4"style="text-align:center;color:#94a3b8;">品名がまだ登録されていません</td></tr>';
       return;
     }
     tbody.innerHTML = items.map(function (b) {
       return (
         '<tr data-id="' + b.id + '">' +
           "<td>" + esc(b.name) + "</td>" +
+          '<td><input data-field="invoice_name" value="' + esc(b.invoice_name) + '" placeholder="（同じ）"></td>' +
           '<td style="text-align:center;"><input type="checkbox" data-field="is_default"' + (b.is_default ? " checked" : "") + "></td>" +
           '<td><button class="del-link" data-delete="' + b.id + '">削除</button></td>' +
         "</tr>"
@@ -95,6 +96,13 @@
   }
 
   async function onToggleDefault(e) {
+    if (e.target.getAttribute("data-field") === "invoice_name") {
+      var rowId = e.target.closest("tr").getAttribute("data-id");
+      var v = e.target.value.trim();
+      var { error: invErr } = await supabaseClient.from("box_types").update({ invoice_name: v || null }).eq("id", rowId);
+      if (invErr) { alert("保存に失敗しました: " + invErr.message); }
+      return;
+    }
     if (e.target.getAttribute("data-field") !== "is_default") return;
     var id = e.target.closest("tr").getAttribute("data-id");
     var { error } = await supabaseClient.from("box_types").update({ is_default: e.target.checked }).eq("id", id);

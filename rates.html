@@ -9,12 +9,12 @@
   .customer-list { display: flex; flex-wrap: wrap; gap: 8px; }
   .customer-chip {
     padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border); background: #fff;
-    cursor: pointer; font-size: 13px; display: flex; align-items: center; gap: 6px;
+    cursor: pointer; font-size: 20px; display: flex; align-items: center; gap: 6px;
   }
   .customer-chip.selected { background: #2563eb; color: #fff; border-color: #2563eb; }
   .inline-form { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
-  .inline-form input { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 13px; }
-  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 12px; padding: 0; font-family: inherit; }
+  .inline-form input { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-family: inherit; font-size: 20px; }
+  .del-link { color: #dc2626; background: none; border: none; cursor: pointer; font-size: 20px; padding: 0; font-family: inherit; }
 </style>
 </head>
 <body>
@@ -91,7 +91,7 @@
   function renderCustomerList() {
     var el = document.getElementById("customer-list");
     if (customers.length === 0) {
-      el.innerHTML = '<div style="color:#94a3b8;font-size:13px;">荷主がまだ登録されていません</div>';
+      el.innerHTML = '<div style="color:#94a3b8;font-size: 20px;">荷主がまだ登録されていません</div>';
       return;
     }
     el.innerHTML = customers.map(function (c) {
