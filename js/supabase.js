@@ -68,13 +68,12 @@ function addAdminSwitcher(profile) {
   if (!nav || nav.querySelector("[data-admin-switcher]")) return;
   const wrap = document.createElement("span");
   wrap.setAttribute("data-admin-switcher", "1");
-  wrap.style.cssText = "display:inline-flex;gap:4px;padding-right:8px;margin-right:4px;border-right:1px solid #e2e8f0;";
+  wrap.style.cssText = "display:inline-flex;flex-wrap:wrap;gap:8px;padding-right:10px;margin-right:2px;border-right:2px solid #e2e8f0;";
   [["driver.html", "🚚 ドライバー"], ["haisya.html", "📋 配車"], ["office.html", "🏢 事務"]].forEach(function (p) {
     const a = document.createElement("a");
-    a.className = "btn btn-small";
+    a.className = "btn admin-switch" + (location.pathname.endsWith("/" + p[0]) ? " is-current" : "");
     a.href = p[0];
     a.textContent = p[1];
-    if (location.pathname.endsWith("/" + p[0])) { a.style.background = "#2563eb"; a.style.color = "#fff"; }
     wrap.appendChild(a);
   });
   nav.insertBefore(wrap, nav.firstChild);
@@ -104,4 +103,12 @@ function timeLabel(ts) {
 function yen(n) {
   if (n === null || n === undefined || n === "") return "-";
   return "¥" + Number(n).toLocaleString("ja-JP");
+}
+
+// 配車日報（report_days）の運転手名：運転手リストの名前を優先し、なければログインアカウントの名前
+function dayDriverName(rd) {
+  if (!rd) return "";
+  if (rd.drivers && rd.drivers.name) return rd.drivers.name;
+  if (rd.profiles && rd.profiles.name) return rd.profiles.name;
+  return "";
 }
