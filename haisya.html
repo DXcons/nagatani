@@ -54,6 +54,14 @@
   }
   .customer-tab.active { background: var(--c); color: #fff; padding-top: 14px; }
   .sheet-card { border-top-left-radius: 0; border-top-right-radius: 0; border-top: none; }
+
+  /* 割り当て */
+  .assign-bar { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .assign-bar .btn { font-weight: 700; }
+  .assign-status { font-size: 20px; color: #475569; }
+  .assigned-chip { background: #dcfce7; color: #166534; padding: 2px 10px; border-radius: 999px; font-weight: 700; }
+  .grid-table td.assigned-cell, .grid-table tbody tr:nth-child(even) td.assigned-cell { background: #dcfce7; }
+  .grid-table td.assigned-cell input { background: #dcfce7; color: #166534; border-color: #86efac; }
 </style>
 </head>
 <body>
@@ -94,6 +102,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="js/supabase.js"></script>
+<script src="js/assign.js"></script>
 <script>
 (function () {
   "use strict";
@@ -115,6 +124,7 @@
   var driversMaster = [];
   var activeSheetId = null;     // 今表示している荷主の表
   var lastCreatedSheetId = null;
+  var busy = false;            // まとめて割り当て中は、画面の自動再読み込みを止める
 
   // 荷主タブの色（荷主の並び順で決まる）
   var TAB_COLORS = [
@@ -188,11 +198,11 @@
   function subscribeRealtime() {
     channel = supabaseClient
       .channel("haisya_sheets")
-      .on("postgres_changes", { event: "*", schema: "public", table: "dispatch_memo_items" }, function () { loadDate(); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "memo_sheets" }, function () { loadDate(); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "memo_sheet_columns" }, function () { loadDate(); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "memo_sheet_rates" }, function () { loadDate(); })
-      .on("postgres_changes", { event: "*", schema: "public", table: "memo_sheet_blocks" }, function () { loadDate(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "dispatch_memo_items" }, function () { if (!busy) loadDate(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "memo_sheets" }, function () { if (!busy) loadDate(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "memo_sheet_columns" }, function () { if (!busy) loadDate(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "memo_sheet_rates" }, function () { if (!busy) loadDate(); })
+      .on("postgres_changes", { event: "*", schema: "public", table: "memo_sheet_blocks" }, function () { if (!busy) loadDate(); })
       .subscribe();
   }
 
@@ -232,7 +242,7 @@
       var sheetIds = sheets.map(function (s) { return s.id; });
       var [{ data: colRows }, { data: itemRows }, { data: rateRows }, { data: blockRows }] = await Promise.all([
         supabaseClient.from("memo_sheet_columns").select("*").in("sheet_id", sheetIds).order("sort_order"),
-        supabaseClient.from("dispatch_memo_items").select("*").in("memo_sheet_id", sheetIds).eq("assigned", false),
+        supabaseClient.from("dispatch_memo_items").select("*").in("memo_sheet_id", sheetIds),
         supabaseClient.from("memo_sheet_rates").select("*").in("sheet_id", sheetIds),
         supabaseClient.from("memo_sheet_blocks").select("*").in("sheet_id", sheetIds)
       ]);
@@ -415,6 +425,9 @@
           var it = findItem(sheet.id, name, c.destination);
           var qty = it && it.quantity != null ? Number(it.quantity) : null;
           if (qty != null) rowSum += qty;
+          if (it && it.assigned) {
+            return '<td class="assigned-cell"><input type="number" value="' + (qty == null ? "" : qty) + '" disabled title="割り当て済み（変更は事務へ）"></td>';
+          }
           return '<td><input type="number" step="any" data-cell data-dest="' + esc(c.destination) + '" value="' + (qty == null ? "" : qty) + '"></td>';
         }).join("");
         var rate = findRate(sheet.id, activeTab, name);
@@ -466,12 +479,26 @@
       var datalist = '<datalist id="boxtype-list-' + sheet.id + '">' +
         boxTypesMaster.map(function (b) { return '<option value="' + esc(b.name) + '">'; }).join("") + "</datalist>";
 
+      // この表（荷主）の割り当て状況
+      var sheetItems = itemsBySheet[sheet.id] || [];
+      var readyCount = sheetItems.filter(function (it) { return !it.assigned && it.planned_driver_id; }).length;
+      var pendingCount = sheetItems.filter(function (it) { return !it.assigned && !it.planned_driver_id; }).length;
+      var assignedCount = sheetItems.filter(function (it) { return it.assigned; }).length;
+      var assignBar =
+        '<div class="assign-bar">' +
+          '<button type="button" class="btn btn-primary" data-bulk-assign="' + sheet.id + '"' + (readyCount ? "" : " disabled") + ">" +
+            "運転手が決まっている分を割り当てる（" + readyCount + "件）</button>" +
+          '<span class="assign-status">運転手未定 ' + pendingCount + "件 ／ " +
+            '<span class="assigned-chip">割り当て済み ' + assignedCount + "件</span></span>" +
+        "</div>";
+
       return (
         '<div class="card sheet-card" data-sheet-id="' + sheet.id + '">' +
           '<div class="sheet-head">' +
             '<div class="name">' + esc(customerName) + "</div>" +
             '<button class="del-link" data-delete-sheet="' + sheet.id + '">この表を削除</button>' +
           "</div>" +
+          assignBar +
           tabBar +
           '<div class="table-wrap"><table class="grid-table">' +
             "<thead><tr><th>品名＼着地</th><th>単価</th>" + headerCols + addColSelect + "<th>個数横合計</th><th>合計金額</th></tr></thead>" +
@@ -550,6 +577,7 @@
 
     var sheet = sheets.find(function (s) { return s.id === sheetId; });
     var existing = findItem(sheetId, itemName, destName);
+    if (existing && existing.assigned) { alert("この個数はすでに運転手に割り当て済みです。変更は事務に連絡してください。"); await loadDate(); return; }
     var raw = td.value;
     var qty = raw === "" ? null : Number(raw);
 
@@ -613,7 +641,30 @@
     await loadDate();
   }
 
+  // この表（荷主）の、運転手が決まっている未割当メモをまとめて割り当てる
+  async function onBulkAssign(sheetId, btn) {
+    var targets = (itemsBySheet[sheetId] || []).filter(function (it) { return !it.assigned && it.planned_driver_id; });
+    if (targets.length === 0) return;
+    if (!confirm(targets.length + " 件を運転手に割り当てます。\n割り当てた個数は緑色になり、この画面では変更できなくなります。\nよろしいですか？")) return;
+    btn.disabled = true;
+    busy = true;
+    var ctx = await loadAssignContext();
+    var errors = [];
+    for (var i = 0; i < targets.length; i++) {
+      btn.textContent = "割り当て中… " + (i + 1) + " / " + targets.length;
+      var err = await assignMemoToDriver(targets[i], targets[i].planned_driver_id, ctx);
+      if (err) errors.push((targets[i].destination || "") + " " + (targets[i].item_name || "") + "：" + err);
+    }
+    if (errors.length) alert("割り当てできなかったものがあります：\n" + errors.join("\n"));
+    else alert(targets.length + " 件を割り当てました。");
+    busy = false;
+    await loadDate();
+  }
+
   async function onContainerClick(e) {
+    var bulkSheetId = e.target.getAttribute("data-bulk-assign");
+    if (bulkSheetId) { await onBulkAssign(bulkSheetId, e.target); return; }
+
     var sheetTab = e.target.getAttribute("data-sheet-tab");
     if (sheetTab) {
       activeSheetId = sheetTab;

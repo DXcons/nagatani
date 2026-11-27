@@ -79,6 +79,7 @@
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="js/supabase.js"></script>
+<script src="js/assign.js"></script>
 <script>
 (function () {
   "use strict";
@@ -266,71 +267,7 @@
 
   // 1件の配車メモを運転手に割り当てる。成功したら null、失敗したらエラー文を返す
   async function assignMemo(memo, driverId) {
-    var memoId = memo.id;
-
-    // driverId = 運転手リスト（drivers）のID。ログインアカウントがあれば profile_id で日報を共有する
-    var master = drivers.find(function (d) { return d.id === driverId; });
-    var dayQuery = supabaseClient.from("report_days").select("*").eq("report_date", memo.memo_date);
-    dayQuery = master && master.profile_id
-      ? dayQuery.or("driver_master_id.eq." + driverId + ",driver_id.eq." + master.profile_id)
-      : dayQuery.eq("driver_master_id", driverId);
-    var { data: existingDays } = await dayQuery;
-    var existingDay = (existingDays || [])[0];
-
-    var reportDayId;
-    if (existingDay) {
-      reportDayId = existingDay.id;
-      if (!existingDay.driver_master_id) {
-        await supabaseClient.from("report_days").update({ driver_master_id: driverId }).eq("id", existingDay.id);
-      }
-    } else {
-      var { data: createdDay, error: dayErr } = await supabaseClient
-        .from("report_days")
-        .insert({
-          driver_master_id: driverId,
-          driver_id: master ? master.profile_id : null,
-          report_date: memo.memo_date,
-          vehicle_no: master ? master.vehicle_no : null
-        })
-        .select().single();
-      if (dayErr) return "配車日報の作成に失敗しました: " + dayErr.message;
-      reportDayId = createdDay.id;
-    }
-
-    var { count } = await supabaseClient
-      .from("report_rows").select("id", { count: "exact", head: true })
-      .eq("report_day_id", reportDayId);
-
-    // 配車メモの名前を、配車日報・請求書用の名前に置き換える（未設定ならそのまま）
-    var destination = destInvoiceName[memo.destination] || memo.destination;
-    var itemName = itemInvoiceName[memo.item_name] || memo.item_name;
-    var match = rateItems.find(function (r) {
-      return r.customer_id === memo.customer_id && r.destination === destination && r.item_name === itemName;
-    });
-
-    var { data: newRow, error: rowErr } = await supabaseClient
-      .from("report_rows")
-      .insert({
-        report_day_id: reportDayId,
-        seq: count || 0,
-        customer_id: memo.customer_id,
-        origin: memo.origin,
-        destination: destination,
-        item_name: itemName,
-        quantity: memo.quantity,
-        unit_price: match ? match.unit_price : null,
-        note: memo.note,
-        status: "running"
-      })
-      .select().single();
-    if (rowErr) return "明細行の作成に失敗しました: " + rowErr.message;
-
-    var { error: memoErr } = await supabaseClient
-      .from("dispatch_memo_items")
-      .update({ assigned: true, assigned_driver_id: master ? master.profile_id : null, planned_driver_id: driverId, assigned_report_row_id: newRow.id })
-      .eq("id", memoId);
-    if (memoErr) return "配車メモの更新に失敗しました: " + memoErr.message;
-    return null;
+    return assignMemoToDriver(memo, driverId, { drivers: drivers, rateItems: rateItems, destInvoiceName: destInvoiceName, itemInvoiceName: itemInvoiceName });
   }
 
   function renderFeed() {
