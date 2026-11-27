@@ -35,6 +35,7 @@
   <div class="notif-panel">
     <div class="notif-head">
       <h3>📋 未割当の配車メモ</h3>
+      <button class="btn btn-primary" id="bulk-assign-btn" style="display:none;font-weight:700;">運転手が決まっている分をまとめて割り当てる</button>
     </div>
     <div id="memo-list"></div>
   </div>
@@ -90,6 +91,7 @@
   var destInvoiceName = {};   // 配送先リストの名前 → 請求書用の名前
   var itemInvoiceName = {};   // 品名リストの名前 → 請求書用の名前
   var channel = null;
+  var busy = false;   // 割り当て処理中フラグ
   var memoChannel = null;
 
   function esc(s) {
@@ -119,22 +121,31 @@
     document.getElementById("logout-btn").addEventListener("click", signOut);
     document.getElementById("rows-body").addEventListener("click", onConfirmClick);
     document.getElementById("memo-list").addEventListener("click", onAssignClick);
+    document.getElementById("bulk-assign-btn").addEventListener("click", onBulkAssign);
+    // 選択を変えたら、まとめて割り当てボタンの件数を更新
+    document.getElementById("memo-list").addEventListener("change", function () {
+      var n = document.querySelectorAll("#memo-list select[data-driver-for]");
+      var c = 0;
+      n.forEach(function (s) { if (s.value) c++; });
+      document.getElementById("bulk-assign-btn").textContent = "運転手が決まっている分をまとめて割り当てる（" + c + "件）";
+    });
 
     subscribeRealtime();
     await loadData();
   }
 
   function subscribeRealtime() {
+    // 割り当て処理中は、自分の更新による再読み込みを止める（終わったらまとめて読み込む）
     channel = supabaseClient
       .channel("office_rows")
       .on("postgres_changes", { event: "*", schema: "public", table: "report_rows" }, function () {
-        loadData();
+        if (!busy) loadData();
       })
       .subscribe();
     memoChannel = supabaseClient
       .channel("office_memos")
       .on("postgres_changes", { event: "*", schema: "public", table: "dispatch_memo_items" }, function () {
-        loadData();
+        if (!busy) loadData();
       })
       .subscribe();
   }
@@ -175,6 +186,10 @@
 
   function renderMemoPanel() {
     var el = document.getElementById("memo-list");
+    var bulkBtn = document.getElementById("bulk-assign-btn");
+    var plannedCount = pendingMemos.filter(function (m) { return m.planned_driver_id; }).length;
+    bulkBtn.style.display = pendingMemos.length ? "inline-block" : "none";
+    bulkBtn.textContent = "運転手が決まっている分をまとめて割り当てる（" + plannedCount + "件）";
     if (pendingMemos.length === 0) {
       el.innerHTML = '<div style="color:#94a3b8;font-size: 20px;">未割当の配車メモはありません</div>';
       return;
@@ -216,6 +231,42 @@
 
     var memo = pendingMemos.find(function (m) { return m.id === memoId; });
     if (!memo) return;
+    busy = true;
+    var err = await assignMemo(memo, driverId);
+    busy = false;
+    if (err) alert(err);
+    await loadData();
+  }
+
+  // 運転手が選ばれている未割当メモを、まとめて割り当てる
+  async function onBulkAssign() {
+    var targets = pendingMemos.map(function (m) {
+      var select = document.querySelector('[data-driver-for="' + m.id + '"]');
+      return { memo: m, driverId: select ? select.value : "" };
+    }).filter(function (t) { return t.driverId; });
+    var skipped = pendingMemos.length - targets.length;
+    if (targets.length === 0) { alert("運転手が選ばれている配車メモがありません。"); return; }
+    if (!confirm(targets.length + " 件をまとめて割り当てます。" +
+      (skipped ? "\n（運転手が未選択の " + skipped + " 件は残ります）" : "") + "\nよろしいですか？")) return;
+
+    var btn = document.getElementById("bulk-assign-btn");
+    btn.disabled = true;
+    busy = true;
+    var errors = [];
+    for (var i = 0; i < targets.length; i++) {
+      btn.textContent = "割り当て中… " + (i + 1) + " / " + targets.length;
+      var err = await assignMemo(targets[i].memo, targets[i].driverId);
+      if (err) errors.push((targets[i].memo.destination || "") + " " + (targets[i].memo.item_name || "") + "：" + err);
+    }
+    busy = false;
+    btn.disabled = false;
+    if (errors.length) alert("割り当てできなかったものがあります：\n" + errors.join("\n"));
+    await loadData();
+  }
+
+  // 1件の配車メモを運転手に割り当てる。成功したら null、失敗したらエラー文を返す
+  async function assignMemo(memo, driverId) {
+    var memoId = memo.id;
 
     // driverId = 運転手リスト（drivers）のID。ログインアカウントがあれば profile_id で日報を共有する
     var master = drivers.find(function (d) { return d.id === driverId; });
@@ -242,7 +293,7 @@
           vehicle_no: master ? master.vehicle_no : null
         })
         .select().single();
-      if (dayErr) { alert("配車日報の作成に失敗しました: " + dayErr.message); return; }
+      if (dayErr) return "配車日報の作成に失敗しました: " + dayErr.message;
       reportDayId = createdDay.id;
     }
 
@@ -272,15 +323,14 @@
         status: "running"
       })
       .select().single();
-    if (rowErr) { alert("明細行の作成に失敗しました: " + rowErr.message); return; }
+    if (rowErr) return "明細行の作成に失敗しました: " + rowErr.message;
 
     var { error: memoErr } = await supabaseClient
       .from("dispatch_memo_items")
       .update({ assigned: true, assigned_driver_id: master ? master.profile_id : null, planned_driver_id: driverId, assigned_report_row_id: newRow.id })
       .eq("id", memoId);
-    if (memoErr) { alert("配車メモの更新に失敗しました: " + memoErr.message); return; }
-
-    await loadData();
+    if (memoErr) return "配車メモの更新に失敗しました: " + memoErr.message;
+    return null;
   }
 
   function renderFeed() {
